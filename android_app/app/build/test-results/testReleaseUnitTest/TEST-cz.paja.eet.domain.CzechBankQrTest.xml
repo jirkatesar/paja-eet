@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="cz.paja.eet.domain.CzechBankQrTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-02T09:53:43.716Z" hostname="laptop" time="0.021">
+  <properties/>
+  <testcase name="slash notation is equivalent to separate fields" classname="cz.paja.eet.domain.CzechBankQrTest" time="0.017"/>
+  <testcase name="account without prefix defaults prefix to zero" classname="cz.paja.eet.domain.CzechBankQrTest" time="0.0"/>
+  <testcase name="spd payload includes variable symbol from voucher number ahead of constant symbol" classname="cz.paja.eet.domain.CzechBankQrTest" time="0.003"/>
+  <testcase name="spd payload contains account amount and constant symbol" classname="cz.paja.eet.domain.CzechBankQrTest" time="0.0"/>
+  <testcase name="known account converts to expected IBAN" classname="cz.paja.eet.domain.CzechBankQrTest" time="0.0"/>
+  <testcase name="invalid bank code returns null" classname="cz.paja.eet.domain.CzechBankQrTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

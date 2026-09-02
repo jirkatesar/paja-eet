@@ -1,0 +1,26 @@
+[
+    {
+        "merged": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-release-50:/drawable_ic_launcher_background.xml.flat",
+        "source": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-main-51:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-release-50:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-main-51:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-release-50:/xml_file_paths.xml.flat",
+        "source": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-main-51:/xml/file_paths.xml"
+    },
+    {
+        "merged": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-release-50:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-main-51:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "cz.paja.eet.app-release-50:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "cz.paja.eet.app-main-51:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-release-50:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "/home/jirik/.gradle/daemon/8.13/cz.paja.eet.app-main-51:/drawable/ic_launcher_foreground.xml"
+    }
+]

@@ -1,0 +1,40 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "eet-backend",
+	"main": "./src/index.ts",
+	"compatibility_date": "2026-08-31",
+	// No custom domain route yet — this is a fresh copy of stenatisnov's "eet"
+	// Worker, not that same deployment. Add a `routes` entry (or run `wrangler
+	// deploy` as-is for a *.workers.dev URL) once this project has its own domain.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "eet-backend-db",
+			"database_id": "4264c8a8-a43a-4667-a9d4-bf7117c6baa5",
+			"migrations_dir": "migrations",
+			"remote": true
+		}
+	],
+	// Every minute — the finest granularity Cloudflare Cron Triggers allow.
+	// scheduled() itself decides what's actually due each run: PENDING EET
+	// retries every invocation, the Fio poll only every FIO_POLL_INTERVAL_SECONDS.
+	"triggers": {
+		"crons": [
+			"* * * * *"
+		]
+	},
+	// Non-sensitive playground config — EET_API_TOKEN, EET_CERT_PEM,
+	// EET_PRIVATE_KEY_PEM, FIO_TOKEN, and ADMIN_PASSWORD are set separately via
+	// `wrangler secret put`.
+	"vars": {
+		"EET_EIC": "CZ00000019",
+		"EET_ID_JEDNOTKY": "1",
+		"EET_ID_POKL": "POKLADNA1",
+		"EET_ENDPOINT": "https://pg.trzbyeet.gov.cz/eet/services/EETServiceSOAP/v4",
+		// Minimum seconds between Fio polls (clamped to a 30s floor by lib/fio.ts).
+		"FIO_POLL_INTERVAL_SECONDS": "60"
+	},
+	"observability": {
+		"enabled": true
+	}
+}

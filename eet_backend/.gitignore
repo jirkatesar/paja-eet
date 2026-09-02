@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+worker-configuration.d.ts
+.dev.vars
+
+# Downloaded reference material from eet.gov.cz (WSDL/XSD/PDFs/sample certs
+# and keys, including the playground .p12 test identities and their
+# extracted private keys) — not committed on principle even though the
+# playground certs are public test material. Re-download per README.md.
+spec/downloads/
