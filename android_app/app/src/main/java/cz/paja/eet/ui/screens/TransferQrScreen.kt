@@ -37,7 +37,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import cz.paja.eet.domain.QrCodeGenerator
@@ -127,18 +126,13 @@ fun TransferQrScreen(
                         }
                     }
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PaymentDetail(
-                            if (data.category == PaymentCategory.VOUCHERS) "Variabilní symbol (číslo poukázky)"
-                            else "Variabilní symbol",
-                            data.variableSymbol,
-                        )
-                        PaymentDetail("Konstantní symbol", data.constantSymbol)
-                        if (data.customerEmail.isNotBlank()) {
-                            PaymentDetail("E-mail zákazníka", data.customerEmail)
-                        }
+                    // The symbols are deliberately not spelled out here: both of
+                    // them are inside the code above, and the operator reads them
+                    // off the payment if they are ever needed. Only the address is
+                    // worth showing, because a typo in it is invisible otherwise.
+                    if (data.customerEmail.isNotBlank()) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        PaymentDetail("E-mail zákazníka", data.customerEmail)
                     }
                 }
             }
@@ -147,13 +141,6 @@ fun TransferQrScreen(
             // the order is only about what happens *after* the money arrives, so a
             // failure is a warning to act on, never a reason to withhold the QR.
             PaymentOrderCard(orderState, isVoucher = data.category == PaymentCategory.VOUCHERS, onRetryOrder)
-
-            Text(
-                "Nechte zákazníka naskenovat QR kód platební bankovní aplikací.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
 
             Button(
                 onClick = { bitmap?.let { shareQrImage(context, it) } },
@@ -175,8 +162,9 @@ fun TransferQrScreen(
 }
 
 /**
- * A label and its value, label small and quiet, value legible — the operator
- * reads these out to the customer when something does not match.
+ * A label and its value, label small and quiet, value legible. Used for the
+ * customer's address, where a typo is invisible until the receipt fails to
+ * arrive.
  */
 @Composable
 private fun PaymentDetail(label: String, value: String) {
