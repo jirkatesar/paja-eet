@@ -113,7 +113,7 @@ fun TransferQrScreen(
             // The QR above is what the customer pays with and it is always here —
             // the order is only about what happens *after* the money arrives, so a
             // failure is a warning to act on, never a reason to withhold the QR.
-            PaymentOrderCard(orderState, onRetryOrder)
+            PaymentOrderCard(orderState, isVoucher = data.category == PaymentCategory.VOUCHERS, onRetryOrder)
 
             Text(
                 "Nechte zákazníka naskenovat QR kód platební bankovní aplikací.",

@@ -212,7 +212,11 @@ fun PaymentScreen(
                 // Separate from the EET result on purpose: the sale can be
                 // registered while the voucher e-mail still needs a retry, and
                 // saying so beats implying the whole payment failed.
-                PaymentOrderCard(viewModel.orderState, onRetry = viewModel::retryOrder)
+                PaymentOrderCard(
+                    viewModel.orderState,
+                    isVoucher = viewModel.category == PaymentCategory.VOUCHERS,
+                    onRetry = viewModel::retryOrder,
+                )
             }
         }
     }

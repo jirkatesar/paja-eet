@@ -21,17 +21,24 @@ import androidx.compose.ui.unit.dp
 /**
  * Progress of the voucher order that goes to the Worker alongside a payment.
  *
- * Shared by both ways of selling a voucher — paid by transfer (its outcome is
- * shown next to the QR code) and paid in cash (shown under the EET result) —
- * because the order means the same thing either way and the two must not drift
- * into telling the operator different stories.
+ * Shown for every sale — paid by transfer (next to the QR code) and in cash
+ * (under the EET result) — because the order means the same thing either way and
+ * the two must not drift into telling the operator different stories.
+ *
+ * [isVoucher] only changes the wording: a voucher sale sends the voucher as well
+ * as the receipt, a service sends the receipt alone. Without it the card told
+ * everyone a voucher was on its way, including the customer who had just paid
+ * for a massage.
  *
  * It is deliberately only ever *informational*: the payment has already been
- * taken or is being taken, so a failure here tells staff to retry or to hand
- * the voucher over by hand, never that the sale itself went wrong.
+ * taken or is being taken, so a failure here tells staff to retry or to hand the
+ * paperwork over by hand, never that the sale itself went wrong.
  */
 @Composable
-fun PaymentOrderCard(state: PaymentOrderState, onRetry: () -> Unit) {
+fun PaymentOrderCard(state: PaymentOrderState, isVoucher: Boolean, onRetry: () -> Unit) {
+    // What is on its way to the customer. A voucher purchase gets both.
+    val sent = if (isVoucher) "Poukaz i účet" else "Účet"
+
     when (state) {
         is PaymentOrderState.Idle -> Unit
         is PaymentOrderState.Recording -> Card {
@@ -43,7 +50,7 @@ fun PaymentOrderCard(state: PaymentOrderState, onRetry: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                Text("Zaznamenávám objednávku poukazu…")
+                Text("Zaznamenávám objednávku…")
             }
         }
         is PaymentOrderState.Recorded -> Card(
@@ -51,7 +58,7 @@ fun PaymentOrderCard(state: PaymentOrderState, onRetry: () -> Unit) {
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Objednávka zaevidována", fontWeight = FontWeight.Bold)
-                Text("Poukaz se pošle na e-mail zákazníka.")
+                Text("$sent se pošle na e-mail zákazníka.")
             }
         }
         is PaymentOrderState.Failed -> Card(
@@ -60,7 +67,7 @@ fun PaymentOrderCard(state: PaymentOrderState, onRetry: () -> Unit) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Objednávku se nepodařilo zaevidovat", fontWeight = FontWeight.Bold)
                 Text(state.message)
-                Text("Poukaz se automaticky nepošle — zkuste to znovu, nebo ho předejte ručně.")
+                Text("$sent se automaticky nepošle — zkuste to znovu, nebo zákazníkovi předejte papíry ručně.")
                 OutlinedButton(onClick = onRetry) { Text("Zkusit znovu") }
             }
         }
