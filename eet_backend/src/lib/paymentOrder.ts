@@ -271,6 +271,9 @@ export async function matchAndFulfil(env: PaymentOrderEnv, payment: IncomingPaym
       outcome === "amount_mismatch"
         ? `expected ${order.amountCzk} CZK, payment was ${payment.amountCzk} CZK`
         : `expected KS ${order.constantSymbol}, payment had ${payment.constantSymbol ?? "(none)"}`;
+    // On the order as well as in the log: the log is only ever read by whoever
+    // thinks to go looking, and this is the question they will be asking.
+    await db.noteMatchFailure(env.DB, order.id, `Platba dorazila, ale nesedí: ${detail}`);
     console.error(
       `Order ${order.id} (${order.kind}, VS ${order.variableSymbol}) not settled by transaction ${payment.idPohyb} — ${detail}`,
     );

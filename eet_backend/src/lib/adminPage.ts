@@ -52,7 +52,7 @@ const BODY = `
   </section>
 
   <section>
-    <h2>Objednávky poukazek</h2>
+    <h2>Objednávky</h2>
     <div class="filters">
       <label>Stav
         <select id="orderStatusFilter">
@@ -68,14 +68,15 @@ const BODY = `
       <button id="ordersRefreshBtn">Obnovit</button>
     </div>
     <p class="hint">
-      <code>PENDING</code> čeká na platbu, <code>PAID</code> je zaplaceno a poukaz se
-      doposílá, <code>SENT</code> doručeno.
+      <b>Poukaz</b> pošle poukaz i účet, <b>masáž</b> jen účet. <code>PENDING</code>
+      čeká na platbu, <code>PAID</code> je zaplaceno a zpráva se doposílá,
+      <code>SENT</code> doručeno.
     </p>
     <div id="ordersTableWrap">
       <table>
         <thead>
           <tr>
-            <th>Č. poukazu</th><th>Stav</th><th>Platba</th><th>Částka (Kč)</th><th>E-mail</th>
+            <th>Druh</th><th>VS</th><th>Stav</th><th>Platba</th><th>Částka (Kč)</th><th>E-mail</th>
             <th>Vytvořeno</th><th>Zaplaceno</th><th>Odesláno</th><th>Pokusy</th><th>Chyba</th>
           </tr>
         </thead>
@@ -185,8 +186,9 @@ const SCRIPT = `
   }
 
   function renderOrders(rows) {
-    fillTable(ordersBody, rows, 10, function (row) {
+    fillTable(ordersBody, rows, 11, function (row) {
       return [
+        row.kind === "VOUCHER" ? "poukaz" : "masáž",
         row.variableSymbol,
         row.status,
         row.paymentMethod === "CASH" ? "hotovost" : "převod",

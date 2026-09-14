@@ -423,3 +423,19 @@ export async function resetAppConfig(db: D1Database): Promise<void> {
     )
     .run();
 }
+
+/**
+ * Records why an arriving payment did *not* settle a pending order — a symbol
+ * that matched while the amount or the constant symbol did not.
+ *
+ * Deliberately not a status change: the order is still waiting, it just now
+ * says what it is waiting for. Without this the reason lived only in a
+ * `console.error`, which is no help at all to whoever is looking at the
+ * dashboard wondering why a customer's payment never turned into a receipt.
+ */
+export async function noteMatchFailure(db: D1Database, id: number, message: string): Promise<void> {
+  await db
+    .prepare(`UPDATE PaymentOrder SET lastError = ?, updatedAt = datetime('now') WHERE id = ? AND status = 'PENDING'`)
+    .bind(message.slice(0, 300), id)
+    .run();
+}
