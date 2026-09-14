@@ -55,8 +55,14 @@ class MainActivity : ComponentActivity() {
                         if (qrData == null) {
                             LaunchedEffect(Unit) { navController.popBackStack() }
                         } else {
+                            // The order state is read reactively on purpose: recording it
+                            // runs in the background and its outcome (a warning, or the
+                            // confirmation that the voucher will be sent) only exists after
+                            // this screen is already on display.
                             TransferQrScreen(
                                 data = qrData,
+                                orderState = paymentViewModel.voucherOrderState,
+                                onRetryOrder = { paymentViewModel.retryVoucherOrder() },
                                 onBack = { navController.popBackStack() },
                                 onNewPayment = { paymentViewModel.startNewPayment() },
                             )

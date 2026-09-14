@@ -47,6 +47,7 @@ import cz.paja.eet.ui.CashSubmissionState
 import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.PaymentMethod
 import cz.paja.eet.ui.PaymentViewModel
+import cz.paja.eet.ui.VoucherOrderCard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -132,7 +133,35 @@ fun PaymentScreen(
                     value = viewModel.voucherNumber,
                     onValueChange = viewModel::onVoucherNumberChanged,
                     label = { Text("Číslo poukázky") },
+                    supportingText = {
+                        if (viewModel.voucherNumberRequired() && viewModel.voucherNumber.isBlank()) {
+                            Text("Bez čísla poukázky nelze poukaz vystavit.")
+                        }
+                    },
+                    isError = viewModel.voucherNumberRequired() && viewModel.voucherNumber.isBlank(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+
+                // Given an address, the Worker records an order and sends the
+                // voucher there — immediately for cash, or once the transfer
+                // arrives. Left blank, no order is made and staff hand the
+                // voucher over themselves.
+                val emailInvalid = viewModel.customerEmailInvalid()
+                OutlinedTextField(
+                    value = viewModel.customerEmail,
+                    onValueChange = viewModel::onCustomerEmailChanged,
+                    label = { Text("E-mail zákazníka (nepovinné)") },
+                    supportingText = {
+                        Text(
+                            if (emailInvalid) "Zkontrolujte prosím adresu."
+                            else if (viewModel.method == PaymentMethod.CASH) "Poukaz se na něj pošle hned po zaevidování."
+                            else "Poukaz se na něj pošle, jakmile platba dorazí.",
+                        )
+                    },
+                    isError = emailInvalid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -155,16 +184,16 @@ fun PaymentScreen(
             }
 
             val cashState = viewModel.cashState
-            val voucherNumberMissing = viewModel.method == PaymentMethod.TRANSFER &&
-                viewModel.category == PaymentCategory.VOUCHERS &&
-                viewModel.voucherNumber.isBlank()
-            val canSubmit = amount != null && readyForMethod && !voucherNumberMissing && cashState !is CashSubmissionState.Loading
+            val voucherDetailsMissing = viewModel.voucherNumberRequired() && viewModel.voucherNumber.isBlank()
+            val canSubmit = amount != null && readyForMethod && !voucherDetailsMissing &&
+                !viewModel.customerEmailInvalid() && cashState !is CashSubmissionState.Loading
 
             Button(
                 onClick = {
                     when (viewModel.method) {
                         PaymentMethod.CASH -> viewModel.submitCashPayment()
-                        PaymentMethod.TRANSFER -> if (viewModel.buildTransferQr()) onShowTransferQr()
+                        // Records the voucher order alongside the QR; never blocks on it.
+                        PaymentMethod.TRANSFER -> if (viewModel.submitTransfer()) onShowTransferQr()
                     }
                 },
                 enabled = canSubmit,
@@ -175,6 +204,10 @@ fun PaymentScreen(
 
             if (viewModel.method == PaymentMethod.CASH) {
                 CashResultCard(cashState, onRetry = viewModel::submitCashPayment, onNewPayment = viewModel::startNewPayment)
+                // Separate from the EET result on purpose: the sale can be
+                // registered while the voucher e-mail still needs a retry, and
+                // saying so beats implying the whole payment failed.
+                VoucherOrderCard(viewModel.voucherOrderState, onRetry = viewModel::retryVoucherOrder)
             }
         }
     }

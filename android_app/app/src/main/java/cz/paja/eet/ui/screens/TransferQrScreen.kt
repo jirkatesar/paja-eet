@@ -37,12 +37,20 @@ import androidx.core.content.FileProvider
 import cz.paja.eet.domain.QrCodeGenerator
 import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.TransferQrData
+import cz.paja.eet.ui.VoucherOrderCard
+import cz.paja.eet.ui.VoucherOrderState
 import java.io.File
 import java.io.FileOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransferQrScreen(data: TransferQrData, onBack: () -> Unit, onNewPayment: () -> Unit) {
+fun TransferQrScreen(
+    data: TransferQrData,
+    orderState: VoucherOrderState,
+    onRetryOrder: () -> Unit,
+    onBack: () -> Unit,
+    onNewPayment: () -> Unit,
+) {
     val context = LocalContext.current
     var bitmap by remember(data) { mutableStateOf<Bitmap?>(null) }
 
@@ -85,6 +93,9 @@ fun TransferQrScreen(data: TransferQrData, onBack: () -> Unit, onNewPayment: () 
                     data.voucherNumber?.let {
                         Text("VS (číslo poukázky): $it", style = MaterialTheme.typography.bodyMedium)
                     }
+                    data.customerEmail?.takeIf { it.isNotBlank() }?.let {
+                        Text("E-mail: $it", style = MaterialTheme.typography.bodyMedium)
+                    }
 
                     val currentBitmap = bitmap
                     if (currentBitmap != null) {
@@ -96,6 +107,11 @@ fun TransferQrScreen(data: TransferQrData, onBack: () -> Unit, onNewPayment: () 
                     }
                 }
             }
+
+            // The QR above is what the customer pays with and it is always here —
+            // the order is only about what happens *after* the money arrives, so a
+            // failure is a warning to act on, never a reason to withhold the QR.
+            VoucherOrderCard(orderState, onRetryOrder)
 
             Text(
                 "Nechte zákazníka naskenovat QR kód platební bankovní aplikací.",
