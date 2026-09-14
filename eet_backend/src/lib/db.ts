@@ -361,3 +361,59 @@ export async function listVoucherOrders(db: D1Database, filter: VoucherOrderFilt
     .all<VoucherOrderRow>();
   return result.results;
 }
+
+/**
+ * The single `AppConfig` row, seeded by migration `0004_app_config.sql` — the
+ * web configuration that overrides the environment. A NULL column means "not
+ * overridden"; see `lib/appConfig.ts` for how that is resolved.
+ *
+ * `fioToken` and `smtpPassword` are stored in the clear here, unlike the
+ * `wrangler secret` values they can override. Nothing in this Worker returns
+ * them to a caller — the admin API reports only whether they are set — but
+ * anyone with database access can read them.
+ */
+export type AppConfigRow = {
+  id: 1;
+  fioEnabled: number | null;
+  fioPollIntervalSeconds: number | null;
+  fioToken: string | null;
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpSecure: string | null;
+  smtpFrom: string | null;
+  smtpFromName: string | null;
+  smtpUser: string | null;
+  smtpPassword: string | null;
+  updatedAt: string;
+};
+
+export async function getAppConfig(db: D1Database): Promise<AppConfigRow> {
+  const row = await db.prepare("SELECT * FROM AppConfig WHERE id = 1").first<AppConfigRow>();
+  if (!row) throw new Error("AppConfig row missing — did migration 0004_app_config.sql run?");
+  return row;
+}
+
+/** Fields the config page may set. `undefined` leaves a column alone; `null` clears the override. */
+export type AppConfigPatch = Partial<Omit<AppConfigRow, "id" | "updatedAt">>;
+
+export async function updateAppConfig(db: D1Database, patch: AppConfigPatch): Promise<void> {
+  const columns = Object.keys(patch) as (keyof AppConfigPatch)[];
+  if (columns.length === 0) return;
+  const assignments = columns.map((column) => `${column} = ?`).join(", ");
+  await db
+    .prepare(`UPDATE AppConfig SET ${assignments}, updatedAt = datetime('now') WHERE id = 1`)
+    .bind(...columns.map((column) => patch[column] ?? null))
+    .run();
+}
+
+/** Drops every override at once, putting the deployment back on its environment values. */
+export async function resetAppConfig(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE AppConfig SET fioEnabled = NULL, fioPollIntervalSeconds = NULL, fioToken = NULL,
+         smtpHost = NULL, smtpPort = NULL, smtpSecure = NULL, smtpFrom = NULL, smtpFromName = NULL,
+         smtpUser = NULL, smtpPassword = NULL, updatedAt = datetime('now')
+       WHERE id = 1`,
+    )
+    .run();
+}

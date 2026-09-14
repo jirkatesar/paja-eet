@@ -1,15 +1,10 @@
 import * as db from "./db";
 import { normalizeAmount, reportSale, type EetEnv } from "./reportSale";
 import { matchAndFulfil, type VoucherOrderEnv } from "./voucherOrder";
+import { resolveFio, DEFAULT_FIO_API_BASE, type FioEnvSource } from "./appConfig";
 
-export interface FioEnv extends EetEnv, VoucherOrderEnv {
-  /** Fio Banka API token. Fio poll is a no-op (never throws from the cron path) when unset. */
-  FIO_TOKEN?: string;
-  /** Minimum seconds between polls; parsed with a 30s floor and a 45s default — see `runFioPollIfDue`. */
-  FIO_POLL_INTERVAL_SECONDS?: string;
-  /** Overrides the Fio API base URL — only useful for pointing local runs at a stub. */
-  FIO_API_BASE?: string;
-}
+/** `FIO_TOKEN`, `FIO_POLL_INTERVAL_SECONDS` and `FIO_API_BASE` come in via `FioEnvSource`. */
+export type FioEnv = EetEnv & VoucherOrderEnv & FioEnvSource;
 
 type FioColumn = { value: unknown } | null | undefined;
 
@@ -30,25 +25,8 @@ export type FioTransaction = {
   message: string | null;
 };
 
-/**
- * Fio enforces a hard 30-second minimum between calls on the same token
- * (exceeding it is answered with HTTP 409, doc §6.1) — this floor is that
- * limit, not a tunable.
- *
- * The default sits below the 60s cron tick on purpose: `runFioPollIfDue`
- * compares against the *previous run*, so an interval of 60s or more would
- * lose roughly every other tick to cron jitter (a tick firing a fraction of
- * a second early finds 59.9s elapsed and skips), silently halving the real
- * poll rate. 45s keeps every tick eligible while still leaving 15s of
- * headroom above Fio's own limit.
- */
-const MIN_POLL_INTERVAL_SECONDS = 30;
-const DEFAULT_POLL_INTERVAL_SECONDS = 45;
-
 /** A hung Fio endpoint shouldn't hold the cron open — see `submitToEet` for the same reasoning. */
 const REQUEST_TIMEOUT_MS = 15_000;
-
-const DEFAULT_FIO_API_BASE = "https://fioapi.fio.cz/v1/rest";
 
 /**
  * Fio's JSON API returns `column0` ("Datum") as Unix epoch **milliseconds**
@@ -131,26 +109,25 @@ export async function runFioPollIfDue(
   env: FioEnv,
   opts: { force?: boolean; fetchTransactions?: (token: string) => Promise<FioTransaction[]> } = {},
 ): Promise<FioPollResult> {
-  if (!env.FIO_TOKEN) {
+  // Token, interval and the on/off switch come from the web configuration when
+  // it overrides them, and from the environment otherwise — see lib/appConfig.ts.
+  const fio = resolveFio(env, await db.getAppConfig(env.DB));
+  if (!fio.enabled) {
     if (opts.force) throw new Error("FIO_NOT_CONFIGURED");
     return { ranNow: false };
   }
 
   const state = await db.getFioState(env.DB);
-  const pollIntervalSeconds = Math.max(MIN_POLL_INTERVAL_SECONDS, Number(env.FIO_POLL_INTERVAL_SECONDS) || DEFAULT_POLL_INTERVAL_SECONDS);
   const now = new Date();
-  if (!opts.force && state.lastRunAt && now.getTime() - db.sqliteDatetimeMs(state.lastRunAt) < pollIntervalSeconds * 1000) {
+  if (!opts.force && state.lastRunAt && now.getTime() - db.sqliteDatetimeMs(state.lastRunAt) < fio.intervalSeconds * 1000) {
     return { ranNow: false };
   }
 
-  // FIO_API_BASE exists so the poll can be pointed at a local stub — the real
-  // API is unreachable from `wrangler dev` in a sandbox, which would otherwise
-  // make order matching impossible to test end to end.
-  const apiBase = (env.FIO_API_BASE || DEFAULT_FIO_API_BASE).replace(/\/+$/, "");
+  const apiBase = fio.apiBase.replace(/\/+$/, "");
 
   try {
     const fetchTransactions = opts.fetchTransactions ?? ((token: string) => fetchNewFioTransactions(token, apiBase));
-    const transactions = await fetchTransactions(env.FIO_TOKEN);
+    const transactions = await fetchTransactions(fio.token!);
     let reportedCount = 0;
     let matchedCount = 0;
 

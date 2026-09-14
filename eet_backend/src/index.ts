@@ -2,18 +2,16 @@ import { nowIso } from "./lib/xmlsign";
 import * as db from "./lib/db";
 import type { EetStatus } from "./lib/db";
 import { ADMIN_HTML } from "./lib/adminPage";
+import { ADMIN_CONFIG_HTML } from "./lib/adminConfigPage";
 import { attemptSubmit, normalizeAmount, reportSale, type EetEnv } from "./lib/reportSale";
 import { runFioPollIfDue } from "./lib/fio";
 import { fillVoucher } from "./lib/voucher";
 import { createVoucherOrder, retryVoucherDeliveries, voucherOrderTtlDays, type VoucherOrderEnv } from "./lib/voucherOrder";
 import type { VoucherOrderRow, VoucherOrderStatus } from "./lib/db";
+import { buildConfigPatch, describeConfig, resolveFio, type FioEnvSource } from "./lib/appConfig";
 
-export interface Env extends EetEnv, VoucherOrderEnv {
+export interface Env extends EetEnv, VoucherOrderEnv, FioEnvSource {
   EET_API_TOKEN: string;
-  /** Fio Banka API token (§5.2.3 of the Fio API docs) — set via `wrangler secret put FIO_TOKEN`. Fio poll stays off (no-op) when unset. */
-  FIO_TOKEN?: string;
-  /** Minimum seconds between Fio polls; clamped to a 30s floor. Defaults to 45 when unset/invalid. */
-  FIO_POLL_INTERVAL_SECONDS?: string;
   /** Password for the GET /admin web dashboard — set via `wrangler secret put ADMIN_PASSWORD`. Login only works while this is set. */
   ADMIN_PASSWORD?: string;
 }
@@ -218,6 +216,43 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return new Response(ADMIN_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 
+  // The configuration page itself is a public shell like /admin; the data behind
+  // it is not. Secrets are never returned — only whether they are set.
+  if (request.method === "GET" && url.pathname === "/admin/config") {
+    return new Response(ADMIN_CONFIG_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
+  }
+
+  if (request.method === "GET" && url.pathname === "/admin/config/data") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+    return json(describeConfig(env, await db.getAppConfig(env.DB)));
+  }
+
+  if (request.method === "POST" && url.pathname === "/admin/config/data") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+
+    const row = await db.getAppConfig(env.DB);
+    const result = buildConfigPatch(body, env, row);
+    if (!result.ok) return json({ error: result.error }, 400);
+
+    await db.updateAppConfig(env.DB, result.patch);
+    return json(describeConfig(env, await db.getAppConfig(env.DB)));
+  }
+
+  // Puts every setting back on its environment value — the way out of a
+  // configuration that has been fiddled into a corner.
+  if (request.method === "POST" && url.pathname === "/admin/config/reset") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+    await db.resetAppConfig(env.DB);
+    return json(describeConfig(env, await db.getAppConfig(env.DB)));
+  }
+
   if (request.method === "GET" && url.pathname === "/admin/data") {
     if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
 
@@ -265,7 +300,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET" && url.pathname === "/fio/status") {
     if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
     const state = await db.getFioState(env.DB);
-    return json({ enabled: Boolean(env.FIO_TOKEN), ...state });
+    // `enabled` reflects the *effective* setting, which the config page can
+    // override — a token being present is no longer the whole story.
+    const fio = resolveFio(env, await db.getAppConfig(env.DB));
+    // `tokenSet` lets the dashboard explain *why* it is off — a switch in the
+    // settings versus a missing credential are different problems.
+    return json({ enabled: fio.enabled, tokenSet: fio.token !== null, ...state });
   }
 
   // Manual "check now" trigger (also used by the /admin dashboard's own button) —

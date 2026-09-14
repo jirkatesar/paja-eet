@@ -2,7 +2,8 @@ import * as db from "./db";
 import type { VoucherOrderRow } from "./db";
 import { normalizeAmount } from "./reportSale";
 import { fillVoucher } from "./voucher";
-import { sendMail, type SmtpConfig, type SmtpSecurity } from "./smtp";
+import { sendMail, type SmtpConfig } from "./smtp";
+import { resolveSmtp, type SmtpEnvSource } from "./appConfig";
 
 /**
  * Voucher orders: the app creates one, and the voucher is generated and
@@ -15,22 +16,14 @@ import { sendMail, type SmtpConfig, type SmtpSecurity } from "./smtp";
  * index in migration 0003.
  */
 
-export interface VoucherOrderEnv {
+export interface VoucherOrderEnv extends SmtpEnvSource {
   DB: D1Database;
   /** Fallback constant symbol for transfer orders whose call omitted one. */
   VOUCHER_KS?: string;
   /** Days an unpaid order holds its variable symbol before expiring. */
   VOUCHER_ORDER_TTL_DAYS?: string;
-  SMTP_HOST?: string;
-  SMTP_PORT?: string;
-  SMTP_SECURE?: string;
-  SMTP_FROM?: string;
-  SMTP_FROM_NAME?: string;
-  SMTP_USER?: string;
-  SMTP_PASSWORD?: string;
 }
 
-const DEFAULT_SMTP_PORT = 465;
 const DEFAULT_ORDER_TTL_DAYS = 30;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VS_RE = /^\d{1,10}$/;
@@ -46,42 +39,6 @@ export function normalizeSymbol(value: string): string {
 }
 
 // ------------------------------------------------------------- configuration
-
-function parseSecurity(value: string | undefined, port: number): SmtpSecurity {
-  const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized && normalized !== "tls" && normalized !== "starttls" && normalized !== "none") {
-    throw new Error(`SMTP_SECURE must be tls, starttls or none (got "${value}")`);
-  }
-  // 465 speaks TLS from the first byte, 587 upgrades via STARTTLS.
-  const security: SmtpSecurity = (normalized as SmtpSecurity) || (port === 587 ? "starttls" : "tls");
-
-  // Pairing these the other way round is the classic submission mistake, and it
-  // fails inside the TLS handshake — where the runtime reports nothing more
-  // useful than "Stream was cancelled." Naming the fix here costs nothing and
-  // saves reading a port table at the worst possible moment.
-  if (port === 587 && security === "tls") {
-    throw new Error("SMTP_PORT 587 expects STARTTLS — set SMTP_SECURE=starttls, or switch to port 465 with tls");
-  }
-  if (port === 465 && security === "starttls") {
-    throw new Error("SMTP_PORT 465 speaks TLS from the first byte — set SMTP_SECURE=tls, or switch to port 587 with starttls");
-  }
-  return security;
-}
-
-export function smtpConfigFromEnv(env: VoucherOrderEnv): SmtpConfig {
-  if (!env.SMTP_HOST) throw new Error("SMTP_HOST is not configured");
-  if (!env.SMTP_FROM) throw new Error("SMTP_FROM is not configured");
-  const port = Number(env.SMTP_PORT) || DEFAULT_SMTP_PORT;
-  return {
-    host: env.SMTP_HOST,
-    port,
-    security: parseSecurity(env.SMTP_SECURE, port),
-    user: env.SMTP_USER ?? "",
-    password: env.SMTP_PASSWORD ?? "",
-    from: env.SMTP_FROM,
-    fromName: env.SMTP_FROM_NAME,
-  };
-}
 
 export function voucherOrderTtlDays(env: VoucherOrderEnv): number {
   const days = Number(env.VOUCHER_ORDER_TTL_DAYS);
@@ -194,7 +151,10 @@ function emailBody(order: VoucherOrderRow): string {
 export async function fulfilOrder(env: VoucherOrderEnv, order: VoucherOrderRow): Promise<boolean> {
   try {
     const pdf = await fillVoucher({ amountCzk: Number(order.amountCzk), voucherNumber: order.variableSymbol });
-    await sendMail(smtpConfigFromEnv(env), {
+    // Mail settings come from the web configuration when it overrides them, and
+    // from the environment otherwise — see lib/appConfig.ts.
+    const smtp = resolveSmtp(env, await db.getAppConfig(env.DB)).config;
+    await sendMail(smtp, {
       to: order.email,
       subject: `Dárkový poukaz na masáž č. ${order.variableSymbol}`,
       text: emailBody(order),

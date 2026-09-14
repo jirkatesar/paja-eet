@@ -64,6 +64,36 @@ see "Voucher orders" in Current status and the README.
   yet. `.dev.vars` (gitignored) has local-only values: `EET_API_TOKEN=dev-local-token`,
   the playground cert/key, `FIO_TOKEN=` (empty — Fio poll is a no-op
   locally until a real token is set), and `ADMIN_PASSWORD=dev-local-admin-password`.
+- **Fio and SMTP settings are editable from the browser** (`src/lib/appConfig.ts`,
+  `adminConfigPage.ts`, migration `0004_app_config.sql`, added 2026-09-14). The
+  page at `GET /admin/config` writes a single `AppConfig` row, and **a stored
+  value overrides the environment; anything unset falls back to it**, so a
+  deployment that never opens the page behaves exactly as before. Each field
+  shows which of the two is winning, and one button clears every override.
+  - **Secrets are write-only.** The Fio token and SMTP password are stored (in
+    plain text — a deliberate trade against `wrangler secret`, which cannot be
+    read back) but never returned: the API reports only `tokenSet`/`passwordSet`,
+    and an empty field means "leave it alone". Verified for both GET and POST.
+  - **Validated on save**, because `fulfilOrder` swallows configuration errors
+    into per-order `lastError` — a bad setting would quietly break delivery
+    rather than announce itself. The port/security pairing is checked against
+    the *effective* values, so a form changing only the port cannot leave a
+    contradictory pair behind (verified: 587 from the form + `tls` from ENV →
+    400). Fio's 30s floor, the port range, the `From` shape and the
+    no-plaintext-to-a-real-host rule are all enforced there too.
+  - **Verified end to end**: a token stored on the page is the one the poll
+    actually sends (a stub received `/last/tajny-fio-token/…` while the
+    environment held a different one), reset put it back on the environment
+    value, and a voucher order was delivered using SMTP settings that existed
+    only in the config (the environment had no host at all).
+  - Admin pages are assembled by `adminShell` (`src/lib/adminShared.ts`) so the
+    login gate, styles and the **menu between /admin and /admin/config** exist
+    once. That matters because the menu navigates with plain links, and the
+    session only survives that reload because the token is kept in
+    `localStorage` and re-validated on load — two copies of that logic would
+    eventually log the operator out on a page switch.
+  - `VOUCHER_KS`, `VOUCHER_ORDER_TTL_DAYS` and the EET settings are deliberately
+    *not* on the page; the table is shaped so they can be added the same way.
 - **`GET /admin` shows voucher orders too** — a second table fed by
   `GET /admin/orders` (status filter + limit), alongside the Fio poll state
   and the `EetSale` table below.

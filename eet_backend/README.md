@@ -419,6 +419,48 @@ replaying a stored row — always includes `pok`, `test`, and `errorCode`
 **`GET /status/:reference`** → full row (`status`, `pok`, `test`,
 `attempts`, `lastErrorCode`, `lastErrorMessage`, timestamps), or `404`.
 
+## Web configuration
+
+Most of what used to need a `wrangler.jsonc` edit and a redeploy can be set from
+the browser instead. `GET /admin/config` is a settings page behind the same
+login as the dashboard, with a menu to switch between the two.
+
+**Stored values override the environment; anything unset falls back to it.** A
+deployment that never opens the page behaves exactly as before, `wrangler
+secret` and `wrangler.jsonc` stay the source of truth, and "Vrátit vše na
+hodnoty z prostředí" clears every override at once. Each field says where its
+effective value comes from, so it is never a guess which of the two is winning.
+
+What can be set:
+
+| | |
+|---|---|
+| **Fio poll** | on/off, check interval (minimum 30s — Fio's own limit), API token |
+| **SMTP** | host, port, security, sender address and name, user, password |
+
+Two things worth knowing:
+
+- **Secrets are write-only.** The page never receives the stored Fio token or
+  SMTP password — only whether they are set — so the fields start empty and
+  staying empty means "leave it alone". Saving the form therefore cannot wipe a
+  credential it was never shown, and a value that cannot be read back cannot
+  leak through a shared screen or a browser's form history.
+- **Storing them in D1 is a real trade.** `wrangler secret` values are encrypted
+  and unreadable; a value in the database is plain text to anyone with database
+  access, and the settings page is only as strong as the single shared
+  `ADMIN_PASSWORD`. Leaving the secrets in `wrangler secret` and using the page
+  for everything else is entirely reasonable.
+
+`FIO_API_BASE` is deliberately *not* on the page — it exists to point local runs
+at a stub, not to be operated in production.
+
+**`GET /admin/config/data`** returns the effective values, their source, and
+`tokenSet`/`passwordSet` — never the secrets. **`POST /admin/config/data`** saves
+(validated: the port and security mode must agree, the interval must respect
+Fio's floor, `SMTP_SECURE=none` is refused for anything but a loopback host) and
+**`POST /admin/config/reset`** drops every override. All three take
+`EET_API_TOKEN` or `ADMIN_PASSWORD`.
+
 ## Admin dashboard
 
 `GET /admin` — a small dependency-free HTML/JS dashboard
