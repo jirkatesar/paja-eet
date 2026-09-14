@@ -31,10 +31,10 @@ import androidx.compose.ui.unit.dp
  * the voucher over by hand, never that the sale itself went wrong.
  */
 @Composable
-fun VoucherOrderCard(state: VoucherOrderState, onRetry: () -> Unit) {
+fun PaymentOrderCard(state: PaymentOrderState, onRetry: () -> Unit) {
     when (state) {
-        is VoucherOrderState.Idle -> Unit
-        is VoucherOrderState.Recording -> Card {
+        is PaymentOrderState.Idle -> Unit
+        is PaymentOrderState.Recording -> Card {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -46,7 +46,7 @@ fun VoucherOrderCard(state: VoucherOrderState, onRetry: () -> Unit) {
                 Text("Zaznamenávám objednávku poukazu…")
             }
         }
-        is VoucherOrderState.Recorded -> Card(
+        is PaymentOrderState.Recorded -> Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -54,7 +54,7 @@ fun VoucherOrderCard(state: VoucherOrderState, onRetry: () -> Unit) {
                 Text("Poukaz se pošle na e-mail zákazníka.")
             }
         }
-        is VoucherOrderState.Failed -> Card(
+        is PaymentOrderState.Failed -> Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

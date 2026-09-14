@@ -18,11 +18,11 @@ sealed class CashSubmissionState {
  * the customer is standing at the counter and can pay regardless, so a failure
  * here is surfaced as a warning next to the QR rather than a blocked payment.
  */
-sealed class VoucherOrderState {
-    data object Idle : VoucherOrderState()
-    data object Recording : VoucherOrderState()
-    data object Recorded : VoucherOrderState()
-    data class Failed(val message: String) : VoucherOrderState()
+sealed class PaymentOrderState {
+    data object Idle : PaymentOrderState()
+    data object Recording : PaymentOrderState()
+    data object Recorded : PaymentOrderState()
+    data class Failed(val message: String) : PaymentOrderState()
 }
 
 data class TransferQrData(
@@ -30,7 +30,8 @@ data class TransferQrData(
     val amountCzk: Int,
     val category: PaymentCategory,
     val constantSymbol: String,
-    val voucherNumber: String? = null,
-    /** Customer address the voucher should go to; blank when staff chose not to record an order. */
-    val customerEmail: String? = null,
+    /** The voucher number for a voucher, a generated one for a service — both are what the payment carries. */
+    val variableSymbol: String,
+    /** Customer address the receipt (and voucher) should go to; blank means nothing is sent. */
+    val customerEmail: String,
 )

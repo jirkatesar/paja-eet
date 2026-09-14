@@ -37,8 +37,8 @@ import androidx.core.content.FileProvider
 import cz.paja.eet.domain.QrCodeGenerator
 import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.TransferQrData
-import cz.paja.eet.ui.VoucherOrderCard
-import cz.paja.eet.ui.VoucherOrderState
+import cz.paja.eet.ui.PaymentOrderCard
+import cz.paja.eet.ui.PaymentOrderState
 import java.io.File
 import java.io.FileOutputStream
 
@@ -46,7 +46,7 @@ import java.io.FileOutputStream
 @Composable
 fun TransferQrScreen(
     data: TransferQrData,
-    orderState: VoucherOrderState,
+    orderState: PaymentOrderState,
     onRetryOrder: () -> Unit,
     onBack: () -> Unit,
     onNewPayment: () -> Unit,
@@ -90,11 +90,13 @@ fun TransferQrScreen(
                         fontWeight = FontWeight.Bold,
                     )
                     Text("KS: ${data.constantSymbol}", style = MaterialTheme.typography.bodyMedium)
-                    data.voucherNumber?.let {
-                        Text("VS (číslo poukázky): $it", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    data.customerEmail?.takeIf { it.isNotBlank() }?.let {
-                        Text("E-mail: $it", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (data.category == PaymentCategory.VOUCHERS) "VS (číslo poukázky): ${data.variableSymbol}"
+                        else "VS: ${data.variableSymbol}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (data.customerEmail.isNotBlank()) {
+                        Text("E-mail: ${data.customerEmail}", style = MaterialTheme.typography.bodyMedium)
                     }
 
                     val currentBitmap = bitmap
@@ -111,7 +113,7 @@ fun TransferQrScreen(
             // The QR above is what the customer pays with and it is always here —
             // the order is only about what happens *after* the money arrives, so a
             // failure is a warning to act on, never a reason to withhold the QR.
-            VoucherOrderCard(orderState, onRetryOrder)
+            PaymentOrderCard(orderState, onRetryOrder)
 
             Text(
                 "Nechte zákazníka naskenovat QR kód platební bankovní aplikací.",

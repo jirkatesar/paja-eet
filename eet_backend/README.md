@@ -15,10 +15,10 @@ It can also render gift vouchers: `POST /voucher` fills the blank voucher
 template with an amount, a voucher number, and a computed validity date —
 see "Gift vouchers" below.
 
-And it can take *orders* for them: `POST /voucher/order` records a sale, then
-matches the incoming bank transfer (or takes the cash sale as paid up front),
-generates the voucher and e-mails it to the customer — see "Voucher orders and
-delivery" below.
+And it can take *orders*: `POST /order` records a sale — a voucher or a service
+— then matches the incoming bank transfer (or takes the cash sale as paid up
+front) and e-mails the customer a receipt, with the voucher attached when there
+is one. See "Payment orders" below.
 
 This project started as a copy of the `eet` Worker built for the
 stena-letnak climbing-wall app (same signing/retry core); the Fio poll is
@@ -297,19 +297,24 @@ reference; it is not bundled.
 so tests can pass bytes), `computeValidUntil(issuedOn?)`, `addMonths`, and
 `pragueToday` — none of which need a Worker runtime.
 
-## Voucher orders and delivery
+## Payment orders
 
 Rendering a voucher is one thing; getting it to the customer is another. The
 app sells a voucher, the customer pays, and somebody has to connect the two.
 That is what an order does.
 
-**`POST /voucher/order`** (Bearer auth: `EET_API_TOKEN` — the app's existing
-credential) creates the order:
+**`POST /order`** (Bearer auth: `EET_API_TOKEN` — the app's existing credential)
+creates the order:
 
 ```json
-{ "amountCzk": 1500, "variableSymbol": "260914", "email": "jan@example.com",
-  "cash": false, "constantSymbol": "0308" }
+{ "kind": "VOUCHER", "amountCzk": 1500, "variableSymbol": "260914",
+  "email": "jan@example.com", "cash": false, "constantSymbol": "0308" }
 ```
+
+`/voucher/order` is the name this had when only vouchers existed and still works
+as an alias, because an app already installed on a phone would otherwise stop
+creating orders the moment the Worker is deployed. `kind` defaults to `VOUCHER`
+for the same reason.
 
 ```json
 201 { "id": 1, "variableSymbol": "260914", "amountCzk": "1500.00",
@@ -318,10 +323,21 @@ credential) creates the order:
       "createdAt": "…", "paidAt": null, "sentAt": null, "lastError": null }
 ```
 
-The **variable symbol is the voucher number** — that is what the customer's
-payment carries and what gets printed on the PDF — so a symbol can only be used
-by one live order (a database index enforces it, not a check-then-insert, so two
-concurrent calls can't both win). `409 variable_symbol_already_used` otherwise.
+**Every payment now carries a variable symbol**, and that is what the incoming
+transfer is matched on. For a voucher it is the voucher number staff wrote down
+(also printed on the PDF); for a service the app generates one when it builds the
+QR, because a massage has no number of its own but its payment still has to be
+told apart from every other one. A symbol can only be used by one live order — a
+database index enforces it, not a check-then-insert, so two concurrent calls
+can't both win. `409 variable_symbol_already_used` otherwise.
+
+**`kind` decides what is sent** once the money is in: `VOUCHER` sends the receipt
+*and* the voucher PDF, `SERVICE` sends only the receipt.
+
+**No e-mail, nothing sent.** The app only records an order when an address was
+given; with the field left blank no order is made at all, so no receipt and no
+voucher go out and the operator hands the paperwork over themselves. The Worker
+still requires an address on any order it is given.
 
 **What happens next depends on `cash`:**
 
@@ -390,8 +406,8 @@ the wire in the clear. There is deliberately no override flag.
 
 ## API
 
-`POST /report`, `GET /status/:reference`, `POST /voucher`, and
-`POST /voucher/order` require `Authorization: Bearer <EET_API_TOKEN>`.
+`POST /report`, `GET /status/:reference`, `POST /voucher`, and `POST /order`
+(and its `/voucher/order` alias) require `Authorization: Bearer <EET_API_TOKEN>`.
 `GET /admin/data`, `GET /admin/orders`, `GET /fio/status`, and
 `POST /fio/poll` accept either `EET_API_TOKEN` or `ADMIN_PASSWORD` — see
 "Admin dashboard" below.

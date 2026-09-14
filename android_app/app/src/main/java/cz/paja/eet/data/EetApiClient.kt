@@ -17,16 +17,19 @@ sealed class EetReportResult {
     data class Error(val message: String) : EetReportResult()
 }
 
+/** What the order is for: a voucher also gets its PDF, a service only the receipt. */
+enum class PaymentKind { VOUCHER, SERVICE }
+
 /**
- * Result of recording a voucher order. [AlreadyExists] is not really a failure:
- * the Worker holds a voucher number exclusively, so a second call for the same
- * number means an earlier call for it did get through (a retry after a timeout,
+ * Result of recording a payment order. [AlreadyExists] is not really a failure:
+ * the Worker holds a variable symbol exclusively, so a second call for the same
+ * symbol means an earlier call for it did get through (a retry after a timeout,
  * or a double tap) — the order exists, which is all the caller wanted.
  */
-sealed class VoucherOrderResult {
-    data object Recorded : VoucherOrderResult()
-    data object AlreadyExists : VoucherOrderResult()
-    data class Error(val message: String) : VoucherOrderResult()
+sealed class PaymentOrderResult {
+    data object Recorded : PaymentOrderResult()
+    data object AlreadyExists : PaymentOrderResult()
+    data class Error(val message: String) : PaymentOrderResult()
 }
 
 /**
@@ -63,43 +66,46 @@ class EetApiClient {
         }
 
     /**
-     * Records a voucher order, so the Worker can e-mail the voucher to the
-     * customer: either right away ([cash], paid at the counter) or as soon as the
-     * incoming bank transfer matches.
+     * Records a payment order, so the Worker can e-mail the customer — the
+     * receipt, plus the voucher itself when [kind] is VOUCHER. Either right away
+     * ([cash], paid at the counter) or as soon as the incoming bank transfer
+     * matches.
      *
      * For a transfer, [constantSymbol] must be exactly what the payment QR
      * carries — if the two ever disagreed, the payment would never match the
-     * order and the voucher would silently never be sent. It is left out for
-     * cash, where there is no payment to match against.
+     * order and nothing would ever be sent. It is left out for cash, where there
+     * is no payment to match against.
      */
-    suspend fun createVoucherOrder(
+    suspend fun createOrder(
         eetUrl: String,
         eetToken: String,
         amountCzk: Int,
         variableSymbol: String,
         email: String,
+        kind: PaymentKind,
         constantSymbol: String?,
         cash: Boolean,
-    ): VoucherOrderResult = withContext(Dispatchers.IO) {
+    ): PaymentOrderResult = withContext(Dispatchers.IO) {
         try {
             val (code, data) = postJson(
-                endpoint = eetUrl.trimEnd('/') + "/voucher/order",
+                endpoint = eetUrl.trimEnd('/') + "/order",
                 token = eetToken,
                 body = JSONObject().apply {
                     put("amountCzk", amountCzk)
                     put("variableSymbol", variableSymbol)
                     put("email", email)
+                    put("kind", kind.name)
                     put("cash", cash)
                     constantSymbol?.let { put("constantSymbol", it) }
                 },
             )
             when (code) {
-                201 -> VoucherOrderResult.Recorded
-                409 -> VoucherOrderResult.AlreadyExists
-                else -> VoucherOrderResult.Error(data.optString("error").ifEmpty { "HTTP $code" })
+                201 -> PaymentOrderResult.Recorded
+                409 -> PaymentOrderResult.AlreadyExists
+                else -> PaymentOrderResult.Error(data.optString("error").ifEmpty { "HTTP $code" })
             }
         } catch (e: IOException) {
-            VoucherOrderResult.Error(e.message ?: "Objednávku se nepodařilo odeslat")
+            PaymentOrderResult.Error(e.message ?: "Objednávku se nepodařilo odeslat")
         }
     }
 

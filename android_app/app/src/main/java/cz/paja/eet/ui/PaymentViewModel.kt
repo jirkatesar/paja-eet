@@ -7,11 +7,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cz.paja.eet.data.EetApiClient
 import cz.paja.eet.data.EetReportResult
-import cz.paja.eet.data.VoucherOrderResult
+import cz.paja.eet.data.PaymentKind
+import cz.paja.eet.data.PaymentOrderResult
 import cz.paja.eet.data.AppSettings
 import cz.paja.eet.data.PaymentPreset
 import cz.paja.eet.data.SettingsRepository
 import cz.paja.eet.domain.CzechBankQr
+import cz.paja.eet.domain.PaymentReference
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -57,7 +59,7 @@ class PaymentViewModel(
         private set
 
     /** Progress of the voucher-order call that runs alongside the QR code. */
-    var voucherOrderState: VoucherOrderState by mutableStateOf(VoucherOrderState.Idle)
+    var orderState: PaymentOrderState by mutableStateOf(PaymentOrderState.Idle)
         private set
 
     /** Stable per-transaction id, reused across retries so the EET Worker can dedupe. */
@@ -73,8 +75,9 @@ class PaymentViewModel(
 
     private data class OrderRequest(
         val amountCzk: Int,
-        val voucherNumber: String,
+        val variableSymbol: String,
         val email: String,
+        val kind: PaymentKind,
         val constantSymbol: String?,
         val cash: Boolean,
     )
@@ -122,7 +125,7 @@ class PaymentViewModel(
         cashState = CashSubmissionState.Idle
         cashReference = null
         transferQr = null
-        voucherOrderState = VoucherOrderState.Idle
+        orderState = PaymentOrderState.Idle
         lastOrderRequest = null
     }
 
@@ -145,13 +148,22 @@ class PaymentViewModel(
         }
         val reference = cashReference ?: UUID.randomUUID().toString().also { cashReference = it }
 
-        // A voucher sold for cash is already paid, so its order goes out `cash =
-        // true` and the Worker e-mails the voucher straight away — no bank
-        // transfer to wait for. It runs alongside the EET report rather than
-        // after it: one failing must not take the other down with it.
+        // Anything sold for cash is already paid, so its order goes out `cash =
+        // true` and the Worker sends the receipt straight away — a voucher as
+        // well, a service just the receipt. It runs alongside the EET report
+        // rather than after it: one failing must not take the other down with it.
+        //
+        // With no e-mail there is nobody to send to, so no order is made at all.
         voucherEmailOrNull()?.let { email ->
-            recordVoucherOrder(
-                OrderRequest(amountCzk = amount, voucherNumber = voucherNumber, email = email, constantSymbol = null, cash = true),
+            recordOrder(
+                OrderRequest(
+                    amountCzk = amount,
+                    variableSymbol = variableSymbolFor(),
+                    email = email,
+                    kind = kindFor(),
+                    constantSymbol = null,
+                    cash = true,
+                ),
             )
         }
 
@@ -164,6 +176,19 @@ class PaymentViewModel(
             }
         }
     }
+
+    /** What is being sold: a voucher gets its PDF, a service only the receipt. */
+    private fun kindFor(): PaymentKind =
+        if (category == PaymentCategory.VOUCHERS) PaymentKind.VOUCHER else PaymentKind.SERVICE
+
+    /**
+     * The variable symbol this payment will carry. A voucher has one already —
+     * the number staff wrote on it. A service has none, so one is generated;
+     * the Worker matches the incoming transfer on it, which is how the right
+     * customer gets the receipt.
+     */
+    private fun variableSymbolFor(): String =
+        if (category == PaymentCategory.VOUCHERS) voucherNumber else PaymentReference.now()
 
     /** True when a non-blank e-mail was entered but doesn't look like an address — a typo worth catching before the payment. */
     fun customerEmailInvalid(): Boolean {
@@ -193,14 +218,15 @@ class PaymentViewModel(
     fun submitTransfer(): Boolean {
         if (!buildTransferQr()) return false
         val qr = transferQr ?: return false
-        // No e-mail means no order to record: staff opted to hand the voucher over themselves.
-        val email = qr.customerEmail?.takeIf { it.isNotBlank() } ?: return true
-        val voucherNumber = qr.voucherNumber ?: return true
-        recordVoucherOrder(
+        // No e-mail, no order: there would be nobody to send the receipt to, so
+        // nothing is recorded and staff hand the voucher over themselves.
+        val email = qr.customerEmail.takeIf { it.isNotBlank() } ?: return true
+        recordOrder(
             OrderRequest(
                 amountCzk = qr.amountCzk,
-                voucherNumber = voucherNumber,
+                variableSymbol = qr.variableSymbol,
                 email = email,
+                kind = kindFor(),
                 constantSymbol = qr.constantSymbol,
                 cash = false,
             ),
@@ -213,34 +239,35 @@ class PaymentViewModel(
      * repeat: the Worker holds the voucher number, so a second call answers
      * `409`, which counts as recorded rather than as a failure.
      */
-    fun retryVoucherOrder() {
-        lastOrderRequest?.let { recordVoucherOrder(it) }
+    fun retryOrder() {
+        lastOrderRequest?.let { recordOrder(it) }
     }
 
-    /** The customer's e-mail, or null when there is none to send a voucher to. */
+    /** The customer's e-mail, or null when there is nobody to send to — in which case nothing is ordered. */
     private fun voucherEmailOrNull(): String? = customerEmail.trim().takeIf { it.isNotBlank() }
 
-    private fun recordVoucherOrder(request: OrderRequest) {
+    private fun recordOrder(request: OrderRequest) {
         lastOrderRequest = request
         val current = settings.value
         if (!current.isEetConfigured) {
-            voucherOrderState = VoucherOrderState.Failed("EET_URL a EET_TOKEN nejsou v Nastavení vyplněné, objednávku nelze zaevidovat.")
+            orderState = PaymentOrderState.Failed("EET_URL a EET_TOKEN nejsou v Nastavení vyplněné, objednávku nelze zaevidovat.")
             return
         }
         viewModelScope.launch {
-            voucherOrderState = VoucherOrderState.Recording
-            val result = eetApiClient.createVoucherOrder(
+            orderState = PaymentOrderState.Recording
+            val result = eetApiClient.createOrder(
                 eetUrl = current.eetUrl,
                 eetToken = current.eetToken,
                 amountCzk = request.amountCzk,
-                variableSymbol = request.voucherNumber,
+                variableSymbol = request.variableSymbol,
                 email = request.email,
+                kind = request.kind,
                 constantSymbol = request.constantSymbol,
                 cash = request.cash,
             )
-            voucherOrderState = when (result) {
-                VoucherOrderResult.Recorded, VoucherOrderResult.AlreadyExists -> VoucherOrderState.Recorded
-                is VoucherOrderResult.Error -> VoucherOrderState.Failed(result.message)
+            orderState = when (result) {
+                PaymentOrderResult.Recorded, PaymentOrderResult.AlreadyExists -> PaymentOrderState.Recorded
+                is PaymentOrderResult.Error -> PaymentOrderState.Failed(result.message)
             }
         }
     }
@@ -259,13 +286,16 @@ class PaymentViewModel(
 
         val ks = if (isVoucher) current.ksVouchers else current.ksServices
         val message = if (isVoucher) listOf("POUKAZKA", note).filter { it.isNotBlank() }.joinToString(" ") else note
+        // Every payment carries a variable symbol now, not just a voucher: it is
+        // how the Worker tells whose transfer arrived and who gets the receipt.
+        val variableSymbol = variableSymbolFor()
         return try {
             val spd = CzechBankQr.buildSpdPayload(
                 CzechBankQr.SpdParams(
                     accountNumber = current.bankAccountNumber,
                     bankCode = current.bankCode,
                     amountCzk = amount,
-                    variableSymbol = if (isVoucher) voucherNumber else null,
+                    variableSymbol = variableSymbol,
                     constantSymbol = ks,
                     message = message.ifBlank { null },
                 ),
@@ -275,8 +305,8 @@ class PaymentViewModel(
                 amountCzk = amount,
                 category = category,
                 constantSymbol = ks,
-                voucherNumber = if (isVoucher) voucherNumber else null,
-                customerEmail = if (isVoucher) customerEmail.trim() else null,
+                variableSymbol = variableSymbol,
+                customerEmail = customerEmail.trim(),
             )
             true
         } catch (e: Exception) {

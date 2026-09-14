@@ -6,23 +6,24 @@ import { ADMIN_CONFIG_HTML } from "./lib/adminConfigPage";
 import { attemptSubmit, normalizeAmount, reportSale, type EetEnv } from "./lib/reportSale";
 import { runFioPollIfDue } from "./lib/fio";
 import { fillVoucher } from "./lib/voucher";
-import { createVoucherOrder, retryVoucherDeliveries, voucherOrderTtlDays, type VoucherOrderEnv } from "./lib/voucherOrder";
-import type { VoucherOrderRow, VoucherOrderStatus } from "./lib/db";
+import { createPaymentOrder, retryDeliveries, orderTtlDays, type PaymentOrderEnv } from "./lib/paymentOrder";
+import type { PaymentOrderRow, PaymentOrderStatus } from "./lib/db";
 import { buildConfigPatch, describeConfig, resolveFio, type FioEnvSource } from "./lib/appConfig";
 
-export interface Env extends EetEnv, VoucherOrderEnv, FioEnvSource {
+export interface Env extends EetEnv, PaymentOrderEnv, FioEnvSource {
   EET_API_TOKEN: string;
   /** Password for the GET /admin web dashboard — set via `wrangler secret put ADMIN_PASSWORD`. Login only works while this is set. */
   ADMIN_PASSWORD?: string;
 }
 
 /** The order fields a caller gets back — internal columns stay internal. */
-function orderResponse(order: VoucherOrderRow) {
+function orderResponse(order: PaymentOrderRow) {
   return {
     id: order.id,
     variableSymbol: order.variableSymbol,
     amountCzk: order.amountCzk,
     constantSymbol: order.constantSymbol,
+    kind: order.kind,
     email: order.email,
     paymentMethod: order.paymentMethod,
     status: order.status,
@@ -98,10 +99,10 @@ export default {
     // Cleanup before the poll, so a symbol nobody paid for is released rather
     // than sitting in the matching set.
     try {
-      const released = await db.expireVoucherOrders(env.DB, voucherOrderTtlDays(env));
-      if (released > 0) console.log(`Voucher orders: expired ${released} unpaid order(s), their symbols are free again`);
+      const released = await db.expireOrders(env.DB, orderTtlDays(env));
+      if (released > 0) console.log(`Orders: expired ${released} unpaid order(s), their symbols are free again`);
     } catch (err) {
-      console.error("Voucher order expiry failed:", err instanceof Error ? err.message : String(err));
+      console.error("Order expiry failed:", err instanceof Error ? err.message : String(err));
     }
 
     try {
@@ -114,10 +115,10 @@ export default {
     // After the poll, so an order settled (or a cash sale made) in this run and
     // whose mail failed gets its retry here rather than waiting a whole minute.
     try {
-      const sent = await retryVoucherDeliveries(env);
-      if (sent > 0) console.log(`Voucher orders: delivered ${sent} pending voucher(s)`);
+      const sent = await retryDeliveries(env);
+      if (sent > 0) console.log(`Orders: delivered ${sent} pending mail(s)`);
     } catch (err) {
-      console.error("Voucher delivery retry failed:", err instanceof Error ? err.message : String(err));
+      console.error("Delivery retry failed:", err instanceof Error ? err.message : String(err));
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -175,10 +176,16 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  // Creates a voucher order. With `cash: true` the voucher is generated and
-  // e-mailed in this same request; otherwise the order waits for the Fio poll
-  // to match the incoming bank transfer.
-  if (request.method === "POST" && url.pathname === "/voucher/order") {
+  // Creates a payment order for a sale — a voucher or a service. With
+  // `cash: true` it is settled and mailed in this same request; otherwise it
+  // waits for the Fio poll to match the incoming bank transfer. Either way what
+  // goes out is the receipt, plus the voucher PDF when `kind` is VOUCHER.
+  //
+  // `/voucher/order` is the name this had when only vouchers existed; it stays
+  // as an alias because an app already installed on a phone would otherwise
+  // stop creating orders the moment this Worker is deployed, and vouchers would
+  // quietly stop being delivered.
+  if (request.method === "POST" && (url.pathname === "/order" || url.pathname === "/voucher/order")) {
     if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
 
     let body: Record<string, unknown>;
@@ -188,7 +195,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return json({ error: "invalid_json" }, 400);
     }
 
-    const result = await createVoucherOrder(env, body);
+    const result = await createPaymentOrder(env, body);
     if (!result.ok) return json({ error: result.error }, result.status);
     return json(orderResponse(result.order), 201);
   }
@@ -293,7 +300,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         ? Math.min(Math.trunc(limitParam), MAX_ADMIN_DATA_LIMIT)
         : DEFAULT_ADMIN_DATA_LIMIT;
 
-    const rows = await db.listVoucherOrders(env.DB, { status: statusParam as VoucherOrderStatus | "ALL", limit });
+    const rows = await db.listPaymentOrders(env.DB, { status: statusParam as PaymentOrderStatus | "ALL", limit });
     return json({ rows });
   }
 

@@ -47,7 +47,7 @@ import cz.paja.eet.ui.CashSubmissionState
 import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.PaymentMethod
 import cz.paja.eet.ui.PaymentViewModel
-import cz.paja.eet.ui.VoucherOrderCard
+import cz.paja.eet.ui.PaymentOrderCard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -143,29 +143,34 @@ fun PaymentScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-
-                // Given an address, the Worker records an order and sends the
-                // voucher there — immediately for cash, or once the transfer
-                // arrives. Left blank, no order is made and staff hand the
-                // voucher over themselves.
-                val emailInvalid = viewModel.customerEmailInvalid()
-                OutlinedTextField(
-                    value = viewModel.customerEmail,
-                    onValueChange = viewModel::onCustomerEmailChanged,
-                    label = { Text("E-mail zákazníka (nepovinné)") },
-                    supportingText = {
-                        Text(
-                            if (emailInvalid) "Zkontrolujte prosím adresu."
-                            else if (viewModel.method == PaymentMethod.CASH) "Poukaz se na něj pošle hned po zaevidování."
-                            else "Poukaz se na něj pošle, jakmile platba dorazí.",
-                        )
-                    },
-                    isError = emailInvalid,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
             }
+
+            // Offered for every sale, not just vouchers: the customer gets a
+            // receipt either way. Left blank, nothing is sent and no order is
+            // recorded — the operator has decided to hand the paperwork over.
+            val emailInvalid = viewModel.customerEmailInvalid()
+            OutlinedTextField(
+                value = viewModel.customerEmail,
+                onValueChange = viewModel::onCustomerEmailChanged,
+                label = { Text("E-mail zákazníka (nepovinné)") },
+                supportingText = {
+                    val isVoucher = viewModel.category == PaymentCategory.VOUCHERS
+                    Text(
+                        when {
+                            emailInvalid -> "Zkontrolujte prosím adresu."
+                            else -> {
+                                val what = if (isVoucher) "Poukaz i účet" else "Účet"
+                                if (viewModel.method == PaymentMethod.CASH) "$what se pošle hned po zaevidování."
+                                else "$what se pošle, jakmile platba dorazí."
+                            }
+                        },
+                    )
+                },
+                isError = emailInvalid,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Způsob platby", style = MaterialTheme.typography.labelLarge)
@@ -207,7 +212,7 @@ fun PaymentScreen(
                 // Separate from the EET result on purpose: the sale can be
                 // registered while the voucher e-mail still needs a retry, and
                 // saying so beats implying the whole payment failed.
-                VoucherOrderCard(viewModel.voucherOrderState, onRetry = viewModel::retryVoucherOrder)
+                PaymentOrderCard(viewModel.orderState, onRetry = viewModel::retryOrder)
             }
         }
     }

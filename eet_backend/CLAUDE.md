@@ -153,6 +153,34 @@ see "Voucher orders" in Current status and the README.
     repo root, not bundled) by removing the three values from the content
     stream while compensating their width with a negative `TJ` kern, so
     nothing around them shifted.
+- **Orders now cover services too, and every settlement sends a receipt**
+  (`src/lib/paymentOrder.ts` renamed from `voucherOrder.ts`, `src/lib/receipt.ts`,
+  migration `0005_payment_order.sql`, added 2026-09-14). A massage paid by
+  transfer had nothing to match against — no variable symbol — so the app now
+  **generates one** (`domain/PaymentReference.kt`, `MMddHHmmss`, tested) and the
+  QR carries it. The table was renamed `VoucherOrder` → `PaymentOrder` and gained
+  `kind` (`VOUCHER` | `SERVICE`).
+  - **`POST /order`** is the endpoint; **`/voucher/order` stays as an alias** and
+    `kind` defaults to `VOUCHER`, so the app already on the phone keeps working
+    if the Worker is deployed first.
+  - **What is sent**: one e-mail per order — the receipt, with the voucher PDF
+    attached when `kind` is VOUCHER. Deliberately not two e-mails: the retry loop
+    only knows sent/not-sent, so a failing receipt would resend the voucher on
+    every attempt.
+  - **The receipt is a stand-in** and says so in the message
+    ("TESTOVACÍ účet, nejde o daňový doklad"). A document that looks like an
+    invoice but isn't one is worse than none. Replace it once an accountant has
+    said what a real one needs; nothing around it depends on the wording.
+  - **Empty e-mail = no order at all.** The app only calls when an address was
+    given, so with the field blank nothing is recorded and nothing is sent. The
+    Worker still requires an address on any order it receives.
+  - Matching is by variable symbol; the constant symbol is compared when the
+    order has one, and skipped when it does not (a cash order never reaches
+    matching, so that is only a caller which did not send one). Verified
+    end to end: a SERVICE order settled by a matching transfer and the receipt
+    went out; a cash service sent its receipt immediately; a cash voucher sent
+    the PDF *and* the receipt; and `/voucher/order` without `kind` still behaves
+    as a voucher.
 - **`POST /voucher/order` takes voucher orders and delivers them**
   (`src/lib/voucherOrder.ts`, migration `0003_voucher_order.sql`, added
   2026-09-14). `{ amountCzk, variableSymbol, email, cash?, constantSymbol? }`

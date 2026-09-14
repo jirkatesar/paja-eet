@@ -200,18 +200,22 @@ export async function updateFioState(
     .run();
 }
 
-export type VoucherOrderStatus = "PENDING" | "PAID" | "SENT" | "EXPIRED" | "CANCELLED";
-export type VoucherPaymentMethod = "TRANSFER" | "CASH";
+export type PaymentOrderStatus = "PENDING" | "PAID" | "SENT" | "EXPIRED" | "CANCELLED";
+export type PaymentMethod = "TRANSFER" | "CASH";
 
-export type VoucherOrderRow = {
+/** What a settled order sends: a voucher also gets its PDF, a service only the receipt. */
+export type PaymentKind = "VOUCHER" | "SERVICE";
+
+export type PaymentOrderRow = {
   id: number;
   variableSymbol: string;
   vsNormalized: string;
   amountCzk: string;
   constantSymbol: string;
   email: string;
-  paymentMethod: VoucherPaymentMethod;
-  status: VoucherOrderStatus;
+  kind: PaymentKind;
+  paymentMethod: PaymentMethod;
+  status: PaymentOrderStatus;
   fioIdPohyb: string | null;
   paidAt: string | null;
   sentAt: string | null;
@@ -221,15 +225,16 @@ export type VoucherOrderRow = {
   updatedAt: string;
 };
 
-export type InsertVoucherOrderParams = {
+export type InsertPaymentOrderParams = {
   variableSymbol: string;
   vsNormalized: string;
   amountCzk: string;
   constantSymbol: string;
   email: string;
-  paymentMethod: VoucherPaymentMethod;
+  kind: PaymentKind;
+  paymentMethod: PaymentMethod;
   /** Transfers start `PENDING` (waiting for the bank payment); cash starts `PAID` and is delivered immediately. */
-  status: VoucherOrderStatus;
+  status: PaymentOrderStatus;
 };
 
 /** True when `error` is the partial unique index rejecting a second order for the same variable symbol. */
@@ -238,11 +243,11 @@ export function isDuplicateVariableSymbol(error: unknown): boolean {
   return message.includes("UNIQUE") && message.includes("vsNormalized");
 }
 
-export async function insertVoucherOrder(db: D1Database, params: InsertVoucherOrderParams): Promise<VoucherOrderRow> {
+export async function insertPaymentOrder(db: D1Database, params: InsertPaymentOrderParams): Promise<PaymentOrderRow> {
   const row = await db
     .prepare(
-      `INSERT INTO VoucherOrder (variableSymbol, vsNormalized, amountCzk, constantSymbol, email, paymentMethod, status, paidAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'PAID' THEN datetime('now') ELSE NULL END)
+      `INSERT INTO PaymentOrder (variableSymbol, vsNormalized, amountCzk, constantSymbol, email, kind, paymentMethod, status, paidAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'PAID' THEN datetime('now') ELSE NULL END)
        RETURNING *`,
     )
     .bind(
@@ -251,26 +256,27 @@ export async function insertVoucherOrder(db: D1Database, params: InsertVoucherOr
       params.amountCzk,
       params.constantSymbol,
       params.email,
+      params.kind,
       params.paymentMethod,
       params.status,
       params.status,
     )
-    .first<VoucherOrderRow>();
-  if (!row) throw new Error("insert into VoucherOrder returned no row");
+    .first<PaymentOrderRow>();
+  if (!row) throw new Error("insert into PaymentOrder returned no row");
   return row;
 }
 
-export async function getVoucherOrder(db: D1Database, id: number): Promise<VoucherOrderRow | null> {
-  const row = await db.prepare("SELECT * FROM VoucherOrder WHERE id = ?").bind(id).first<VoucherOrderRow>();
+export async function getPaymentOrder(db: D1Database, id: number): Promise<PaymentOrderRow | null> {
+  const row = await db.prepare("SELECT * FROM PaymentOrder WHERE id = ?").bind(id).first<PaymentOrderRow>();
   return row ?? null;
 }
 
 /** The `PENDING` order a bank transaction is expected to settle, matched on the normalized variable symbol. */
-export async function findPendingVoucherOrder(db: D1Database, vsNormalized: string): Promise<VoucherOrderRow | null> {
+export async function findPendingPaymentOrder(db: D1Database, vsNormalized: string): Promise<PaymentOrderRow | null> {
   const row = await db
-    .prepare(`SELECT * FROM VoucherOrder WHERE vsNormalized = ? AND status = 'PENDING'`)
+    .prepare(`SELECT * FROM PaymentOrder WHERE vsNormalized = ? AND status = 'PENDING'`)
     .bind(vsNormalized)
-    .first<VoucherOrderRow>();
+    .first<PaymentOrderRow>();
   return row ?? null;
 }
 
@@ -279,20 +285,20 @@ export async function findPendingVoucherOrder(db: D1Database, vsNormalized: stri
  * on `PENDING` for the same reason `markAttemptFailed` is: a replayed poll must
  * not re-open or re-stamp an order that has already moved on.
  */
-export async function markVoucherPaid(db: D1Database, id: number, fioIdPohyb: string): Promise<void> {
+export async function markOrderPaid(db: D1Database, id: number, fioIdPohyb: string): Promise<void> {
   await db
     .prepare(
-      `UPDATE VoucherOrder SET status = 'PAID', fioIdPohyb = ?, paidAt = datetime('now'), updatedAt = datetime('now')
+      `UPDATE PaymentOrder SET status = 'PAID', fioIdPohyb = ?, paidAt = datetime('now'), updatedAt = datetime('now')
        WHERE id = ? AND status = 'PENDING'`,
     )
     .bind(fioIdPohyb, id)
     .run();
 }
 
-export async function markVoucherSent(db: D1Database, id: number): Promise<void> {
+export async function markOrderSent(db: D1Database, id: number): Promise<void> {
   await db
     .prepare(
-      `UPDATE VoucherOrder SET status = 'SENT', sentAt = datetime('now'), attempts = attempts + 1, lastError = NULL, updatedAt = datetime('now') WHERE id = ?`,
+      `UPDATE PaymentOrder SET status = 'SENT', sentAt = datetime('now'), attempts = attempts + 1, lastError = NULL, updatedAt = datetime('now') WHERE id = ?`,
     )
     .bind(id)
     .run();
@@ -303,21 +309,21 @@ export async function markVoucherSent(db: D1Database, id: number): Promise<void>
  * `PAID`: the money did arrive, so this is not the order's problem to lose —
  * the cron keeps retrying until it goes out.
  */
-export async function markVoucherSendFailed(db: D1Database, id: number, errorMessage: string): Promise<void> {
+export async function markOrderSendFailed(db: D1Database, id: number, errorMessage: string): Promise<void> {
   await db
     .prepare(
-      `UPDATE VoucherOrder SET attempts = attempts + 1, lastError = ?, updatedAt = datetime('now') WHERE id = ? AND status = 'PAID'`,
+      `UPDATE PaymentOrder SET attempts = attempts + 1, lastError = ?, updatedAt = datetime('now') WHERE id = ? AND status = 'PAID'`,
     )
     .bind(errorMessage.slice(0, 500), id)
     .run();
 }
 
 /** Paid orders whose voucher has not gone out yet — the cron's delivery retry queue. */
-export async function listVoucherOrdersToSend(db: D1Database, limit: number): Promise<VoucherOrderRow[]> {
+export async function listOrdersToSend(db: D1Database, limit: number): Promise<PaymentOrderRow[]> {
   const result = await db
-    .prepare(`SELECT * FROM VoucherOrder WHERE status = 'PAID' AND sentAt IS NULL ORDER BY attempts ASC, id ASC LIMIT ?`)
+    .prepare(`SELECT * FROM PaymentOrder WHERE status = 'PAID' AND sentAt IS NULL ORDER BY attempts ASC, id ASC LIMIT ?`)
     .bind(limit)
-    .all<VoucherOrderRow>();
+    .all<PaymentOrderRow>();
   return result.results;
 }
 
@@ -326,13 +332,13 @@ export async function listVoucherOrdersToSend(db: D1Database, limit: number): Pr
  * partial unique index stops covering `EXPIRED`) so it can be issued again.
  * Returns how many were expired, for the caller to log.
  */
-export async function expireVoucherOrders(db: D1Database, olderThanDays: number): Promise<number> {
+export async function expireOrders(db: D1Database, olderThanDays: number): Promise<number> {
   // The message is built here rather than concatenated in SQL, where a bound
   // number renders as "30.0" and produces "do 30.0 dní".
   const message = `Unpaid ${olderThanDays} days after ordering; the voucher number is free for reuse.`;
   const result = await db
     .prepare(
-      `UPDATE VoucherOrder SET status = 'EXPIRED', lastError = ?, updatedAt = datetime('now')
+      `UPDATE PaymentOrder SET status = 'EXPIRED', lastError = ?, updatedAt = datetime('now')
        WHERE status = 'PENDING' AND datetime(createdAt) < datetime('now', ?)`,
     )
     .bind(message, `-${olderThanDays} days`)
@@ -340,13 +346,13 @@ export async function expireVoucherOrders(db: D1Database, olderThanDays: number)
   return result.meta.changes ?? 0;
 }
 
-export type VoucherOrderFilter = {
-  status: VoucherOrderStatus | "ALL";
+export type PaymentOrderFilter = {
+  status: PaymentOrderStatus | "ALL";
   limit: number;
 };
 
 /** Most recent first — backs the admin dashboard's orders table. */
-export async function listVoucherOrders(db: D1Database, filter: VoucherOrderFilter): Promise<VoucherOrderRow[]> {
+export async function listPaymentOrders(db: D1Database, filter: PaymentOrderFilter): Promise<PaymentOrderRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   if (filter.status !== "ALL") {
@@ -356,9 +362,9 @@ export async function listVoucherOrders(db: D1Database, filter: VoucherOrderFilt
   params.push(filter.limit);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await db
-    .prepare(`SELECT * FROM VoucherOrder ${where} ORDER BY id DESC LIMIT ?`)
+    .prepare(`SELECT * FROM PaymentOrder ${where} ORDER BY id DESC LIMIT ?`)
     .bind(...params)
-    .all<VoucherOrderRow>();
+    .all<PaymentOrderRow>();
   return result.results;
 }
 

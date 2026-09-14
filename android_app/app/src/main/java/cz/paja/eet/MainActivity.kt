@@ -61,8 +61,8 @@ class MainActivity : ComponentActivity() {
                             // this screen is already on display.
                             TransferQrScreen(
                                 data = qrData,
-                                orderState = paymentViewModel.voucherOrderState,
-                                onRetryOrder = { paymentViewModel.retryVoucherOrder() },
+                                orderState = paymentViewModel.orderState,
+                                onRetryOrder = { paymentViewModel.retryOrder() },
                                 onBack = { navController.popBackStack() },
                                 onNewPayment = { paymentViewModel.startNewPayment() },
                             )

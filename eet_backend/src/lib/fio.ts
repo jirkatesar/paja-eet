@@ -1,10 +1,10 @@
 import * as db from "./db";
 import { normalizeAmount, reportSale, type EetEnv } from "./reportSale";
-import { matchAndFulfil, type VoucherOrderEnv } from "./voucherOrder";
+import { matchAndFulfil, type PaymentOrderEnv } from "./paymentOrder";
 import { resolveFio, DEFAULT_FIO_API_BASE, type FioEnvSource } from "./appConfig";
 
 /** `FIO_TOKEN`, `FIO_POLL_INTERVAL_SECONDS` and `FIO_API_BASE` come in via `FioEnvSource`. */
-export type FioEnv = EetEnv & VoucherOrderEnv & FioEnvSource;
+export type FioEnv = EetEnv & PaymentOrderEnv & FioEnvSource;
 
 type FioColumn = { value: unknown } | null | undefined;
 
@@ -86,7 +86,7 @@ export type FioPollResult = { ranNow: boolean; reportedCount?: number; matchedCo
  *
  * 1. **Settles a voucher order**, if the payment's variable symbol, amount and
  *    constant symbol all match one that is waiting — which is what triggers the
- *    voucher PDF and its e-mail (see `lib/voucherOrder.ts`). Most credits match
+ *    voucher PDF and its e-mail (see `lib/paymentOrder.ts`). Most credits match
  *    no order and fall straight through.
  * 2. **Registers the credit with EET**, exactly as before: every
  *    positive-amount CZK transaction is revenue, keyed by Fio's own `idPohyb`
