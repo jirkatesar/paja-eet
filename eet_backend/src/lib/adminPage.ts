@@ -127,10 +127,14 @@ const SCRIPT = `
       : state.tokenSet
         ? "vypnutý (vypnuto v Nastavení)"
         : "vypnutý (token není nastaven)";
+    // A recent "last attempt" looks exactly like a recent success, which is how
+    // a poll that has been failing for hours reads as healthy. Say when the last
+    // attempt failed, right next to the switch.
+    if (state.enabled && state.lastError) statusText += " — poslední pokus SELHAL";
 
     fioStatusEl.textContent = "";
     fioStatusEl.appendChild(fioRow("Fio poll", statusText));
-    fioStatusEl.appendChild(fioRow("Poslední běh", state.lastRunAt || "—"));
+    fioStatusEl.appendChild(fioRow("Poslední pokus", state.lastRunAt || "—"));
     fioStatusEl.appendChild(fioRow("Naposledy zaevidováno transakcí", String(state.lastReportedCount)));
     fioStatusEl.appendChild(
       fioRow("Poslední chyba", state.lastError ? state.lastError + " (" + state.lastErrorAt + ")" : "—"),
