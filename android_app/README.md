@@ -33,3 +33,26 @@ Point `local.properties` → `sdk.dir` at your Android SDK if Android Studio has
 ```
 
 Covers the IBAN/mod-97 checksum and SPD payload builder in [`CzechBankQr`](app/src/main/java/cz/paja/eet/domain/CzechBankQr.kt) against known reference vectors.
+
+## Verifying the look
+
+`Theme.kt` holds the whole palette, the type scale and the corner radii; the
+colours are the green the vouchers are printed in, and dynamic colour is off so
+that stays true on Android 12+ instead of being replaced by the wallpaper's.
+
+**The screens have not been looked at by whoever last changed them.** The
+intent was to render them without an emulator using AGP's Compose preview
+screenshot testing (`com.android.compose.screenshot`), which is what
+`./gradlew updateDebugScreenshotTest` is for — but the plugin is still alpha and
+discovered none of the previews in this setup, so it was removed again rather
+than left in the build pretending to work. Everything below therefore rests on
+reading the source, and wants a pair of eyes on a real device:
+
+- the payment form: amount, category, voucher number, e-mail, method, submit
+- the QR screen: amount, code, symbols, and the order card under it
+- both in **light and dark** — dark is the one worth checking, since that is
+  where the QR's white surface matters
+- the settings screen's four sections
+
+Worth knowing when looking: the app is deliberately not dynamic-coloured, so
+changing the wallpaper must not change anything.

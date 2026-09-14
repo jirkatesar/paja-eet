@@ -2,6 +2,7 @@ package cz.paja.eet.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -48,6 +49,7 @@ import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.PaymentMethod
 import cz.paja.eet.ui.PaymentViewModel
 import cz.paja.eet.ui.PaymentOrderCard
+import cz.paja.eet.ui.theme.SectionLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,10 +101,14 @@ fun PaymentScreen(
                 }
             }
 
+            // The amount is what this screen is for; everything else is a choice
+            // about it. It gets the size to match, so it can be read back to the
+            // customer without leaning over the phone.
             OutlinedTextField(
                 value = viewModel.amountText,
                 onValueChange = viewModel::onAmountTextChanged,
                 label = { Text("Částka (Kč)") },
+                textStyle = MaterialTheme.typography.headlineMedium,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -113,7 +119,7 @@ fun PaymentScreen(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Typ platby", style = MaterialTheme.typography.labelLarge)
+                Text("TYP PLATBY", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = viewModel.category == PaymentCategory.SERVICES,
@@ -173,7 +179,7 @@ fun PaymentScreen(
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Způsob platby", style = MaterialTheme.typography.labelLarge)
+                Text("ZPŮSOB PLATBY", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = viewModel.method == PaymentMethod.CASH,
@@ -202,9 +208,13 @@ fun PaymentScreen(
                     }
                 },
                 enabled = canSubmit,
+                contentPadding = PaddingValues(vertical = 16.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (viewModel.method == PaymentMethod.CASH) "Zaevidovat platbu" else "Vytvořit QR kód")
+                Text(
+                    if (viewModel.method == PaymentMethod.CASH) "Zaevidovat platbu" else "Vytvořit QR kód",
+                    style = MaterialTheme.typography.titleMedium,
+                )
             }
 
             if (viewModel.method == PaymentMethod.CASH) {

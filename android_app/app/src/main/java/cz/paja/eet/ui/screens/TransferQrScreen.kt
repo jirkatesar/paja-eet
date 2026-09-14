@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,8 +18,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -29,13 +33,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import cz.paja.eet.domain.QrCodeGenerator
 import cz.paja.eet.ui.PaymentCategory
+import cz.paja.eet.ui.theme.MoneyAmount
+import cz.paja.eet.ui.theme.SectionLabel
 import cz.paja.eet.ui.TransferQrData
 import cz.paja.eet.ui.PaymentOrderCard
 import cz.paja.eet.ui.PaymentOrderState
@@ -80,32 +88,57 @@ fun TransferQrScreen(
         ) {
             Card {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Text(
-                        "${data.amountCzk} Kč — ${if (data.category == PaymentCategory.SERVICES) "masáž" else "poukázky"}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text("KS: ${data.constantSymbol}", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        if (data.category == PaymentCategory.VOUCHERS) "VS (číslo poukázky): ${data.variableSymbol}"
-                        else "VS: ${data.variableSymbol}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (data.customerEmail.isNotBlank()) {
-                        Text("E-mail: ${data.customerEmail}", style = MaterialTheme.typography.bodyMedium)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            if (data.category == PaymentCategory.SERVICES) "MASÁŽ" else "POUKÁZKY",
+                            style = SectionLabel,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text("${data.amountCzk} Kč", style = MoneyAmount)
                     }
 
+                    // The QR sits on its own white surface in both themes. On a dark
+                    // card the quiet zone and the darker modules lose each other, and
+                    // the customer's banking app cannot read it — a payment screen
+                    // that only works in light mode is not a payment screen.
                     val currentBitmap = bitmap
                     if (currentBitmap != null) {
-                        Image(
-                            bitmap = currentBitmap.asImageBitmap(),
-                            contentDescription = "QR platba",
-                            modifier = Modifier.size(280.dp),
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = Color.White,
+                            modifier = Modifier.padding(4.dp),
+                        ) {
+                            Image(
+                                bitmap = currentBitmap.asImageBitmap(),
+                                contentDescription = "QR platba",
+                                modifier = Modifier
+                                    .padding(12.dp)
+                                    .size(260.dp),
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PaymentDetail(
+                            if (data.category == PaymentCategory.VOUCHERS) "Variabilní symbol (číslo poukázky)"
+                            else "Variabilní symbol",
+                            data.variableSymbol,
                         )
+                        PaymentDetail("Konstantní symbol", data.constantSymbol)
+                        if (data.customerEmail.isNotBlank()) {
+                            PaymentDetail("E-mail zákazníka", data.customerEmail)
+                        }
                     }
                 }
             }
@@ -118,22 +151,38 @@ fun TransferQrScreen(
             Text(
                 "Nechte zákazníka naskenovat QR kód platební bankovní aplikací.",
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
 
             Button(
                 onClick = { bitmap?.let { shareQrImage(context, it) } },
                 enabled = bitmap != null,
+                contentPadding = PaddingValues(vertical = 14.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Sdílet QR kód") }
 
-            Button(
+            OutlinedButton(
                 onClick = {
                     onNewPayment()
                     onBack()
                 },
+                contentPadding = PaddingValues(vertical = 14.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Zavřít") }
         }
+    }
+}
+
+/**
+ * A label and its value, label small and quiet, value legible — the operator
+ * reads these out to the customer when something does not match.
+ */
+@Composable
+private fun PaymentDetail(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(label, style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
     }
 }
 

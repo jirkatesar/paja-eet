@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import cz.paja.eet.ui.theme.SectionLabel
 import cz.paja.eet.data.PaymentPreset
 import cz.paja.eet.ui.SettingsViewModel
 
@@ -80,7 +81,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
                 return@Column
             }
 
-            Text("EET 2.0", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("EET 2.0", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(
                 value = form.eetUrl,
                 onValueChange = { v -> viewModel.update { it.copy(eetUrl = v) } },
@@ -100,7 +101,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
 
             HorizontalDivider()
 
-            Text("Bankovní účet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("BANKOVNÍ ÚČET", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(
                 value = form.bankAccountNumber,
                 onValueChange = { v -> viewModel.update { it.copy(bankAccountNumber = v) } },
@@ -119,7 +120,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
 
             HorizontalDivider()
 
-            Text("Konstantní symboly", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("KONSTANTNÍ SYMBOLY", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(
                 value = form.ksServices,
                 onValueChange = { v -> viewModel.update { it.copy(ksServices = v) } },
@@ -139,7 +140,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
 
             HorizontalDivider()
 
-            Text("Přednastavené platby", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("PŘEDNASTAVENÉ PLATBY", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             PresetsEditor(
                 presets = form.presets,
                 onAdd = viewModel::addPreset,

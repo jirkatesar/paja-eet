@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Only the launch background lives here — every other colour comes from
+      Theme.kt, so there is one place to change the palette. Without this the
+      window is white until Compose draws, which flashes in dark mode.
+    -->
+    <color name="window_background">#F7FBF4</color>
+</resources>
