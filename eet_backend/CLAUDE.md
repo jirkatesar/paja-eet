@@ -16,12 +16,17 @@ Worker built for the stena-letnak climbing-wall app (same signing/retry
 core, D1 schema `0001_init.sql`, HTTP API) — the source repo at
 `/home/jirik/stena-letnak/eet` is untouched by this copy. The Fio poll
 (`src/lib/fio.ts`, migration `0002_fio_state.sql`) is new here and was
-ported from stena-letnak's own `src/lib/fio.ts`, simplified: this Worker has
-no `PaymentOrder` table to match transactions against, so it reports every
-positive-amount transaction as-is rather than only "unmatched" ones — see
-README's "Fio Banka polling" section for the full reasoning and the
-double-reporting trade-off that implies if a consuming app also calls
-`/report` itself for the same transfers.
+ported from stena-letnak's own `src/lib/fio.ts`, simplified: there is no
+`PaymentOrder` table to match transactions against, so every positive-amount
+transaction is reported as-is rather than only "unmatched" ones — see README's
+"Fio Banka polling" section for the full reasoning and the double-reporting
+trade-off that implies if a consuming app also calls `/report` itself for the
+same transfers.
+
+Since 2026-09-14 it also issues gift vouchers end to end: `POST /voucher`
+renders one, and `POST /voucher/order` (migration `0003_voucher_order.sql`)
+takes an order, matches the incoming bank transfer, and e-mails the voucher —
+see "Voucher orders" in Current status and the README.
 
 ## Current status
 
@@ -59,7 +64,10 @@ double-reporting trade-off that implies if a consuming app also calls
   yet. `.dev.vars` (gitignored) has local-only values: `EET_API_TOKEN=dev-local-token`,
   the playground cert/key, `FIO_TOKEN=` (empty — Fio poll is a no-op
   locally until a real token is set), and `ADMIN_PASSWORD=dev-local-admin-password`.
-- **`GET /admin` is now a real login-gated dashboard, not just a static
+- **`GET /admin` shows voucher orders too** — a second table fed by
+  `GET /admin/orders` (status filter + limit), alongside the Fio poll state
+  and the `EetSale` table below.
+- **`GET /admin` is a real login-gated dashboard, not just a static
   notice** (`src/lib/adminPage.ts`) — password field authenticates against
   a new `ADMIN_PASSWORD` secret (separate from `EET_API_TOKEN`, see
   `checkAdminAuth` in `index.ts`), token kept in that browser's
@@ -83,11 +91,126 @@ double-reporting trade-off that implies if a consuming app also calls
   `reportSale.ts`).
 - **Cron changed from `*/5 * * * *` to `* * * * *`** (every minute — the
   finest granularity Cloudflare allows) so the Fio poll can run close to its
-  configured `FIO_POLL_INTERVAL_SECONDS` (30s floor, 60s default) rather
+  configured `FIO_POLL_INTERVAL_SECONDS` (30s floor, 45s default) rather
   than being capped at 5 minutes; `scheduled()` still only actually retries
   a `PENDING` EET row or fetches Fio when there's something due, so this
   doesn't change how often EET itself gets hit for rows with nothing new to
   retry.
+- **`POST /voucher` renders filled gift vouchers** (`src/lib/voucher.ts`,
+  added 2026-09-14). `{ amountCzk, voucherNumber }` in, an
+  `application/pdf` attachment out — the blank template
+  (`assets/poukazka.pdf`, bundled as a Data module) with the amount, the
+  number, and "Platnost do" drawn into the three blanks it already has. The
+  date is always computed: today in **Europe/Prague** + 6 months, clamping to
+  month end. Bearer auth is `EET_API_TOKEN`, same as `/report` — this is
+  meant to be called by the Android app (`android_app/`, a sibling checkout),
+  which already has a "poukázky" category and a `voucherNumber` field it puts
+  in the payment's variable symbol; the app does *not* call it yet.
+  Verified locally end-to-end through `wrangler dev`: real PDFs rendered and
+  eyeballed for 3-, 4-, 5-, and 6-digit amounts and an 11-character number,
+  the date logic unit-checked against month-end and leap-year cases, and
+  `401`/`400` paths plus a `Content-Disposition` header-injection attempt
+  (sanitized) exercised. **Not** verified on a deployed Worker.
+  - Coordinates for the three blanks are hardcoded in `voucher.ts`, derived
+    from the template's own glyph metrics — they are *not* computed at
+    runtime. **Re-measure them if `assets/poukazka.pdf` is ever regenerated**
+    or the values will land in the wrong place.
+  - Values are drawn in Times-Roman (a base-14 font, nothing embedded): its
+    metrics are identical to the template's Liberation Serif for every
+    character drawn here, so the text lines up exactly. If the template ever
+    uses a different face, that assumption dies with it.
+  - The blank voucher itself came from `poukazka-original.pdf` (kept in the
+    repo root, not bundled) by removing the three values from the content
+    stream while compensating their width with a negative `TJ` kern, so
+    nothing around them shifted.
+- **`POST /voucher/order` takes voucher orders and delivers them**
+  (`src/lib/voucherOrder.ts`, migration `0003_voucher_order.sql`, added
+  2026-09-14). `{ amountCzk, variableSymbol, email, cash?, constantSymbol? }`
+  in; the order is created, and the voucher is generated and **e-mailed** to
+  the customer either immediately (`cash: true`, paid at the counter) or as
+  soon as the Fio poll matches the incoming transfer on **VS + amount + KS**.
+  The variable symbol *is* the voucher number, and a partial unique index keeps
+  it unique among live orders — verified against real SQLite, including that
+  expiring an order frees the symbol for reuse.
+  - **Mail goes over `cloudflare:sockets`** (`src/lib/smtp.ts`) — Workers have
+    no usable mail library, `nodemailer` needs node `net`/`tls`. This is
+    hand-rolled SMTP: EHLO, AUTH PLAIN/LOGIN, MAIL FROM/RCPT TO/DATA, MIME
+    `multipart/mixed` with a base64 PDF, dot-stuffing, RFC 2047 subject.
+  - **Use port 465** (`SMTP_SECURE=tls`). Workerd has an open bug with
+    `startTls()` on 587 (workerd#2712) that hangs some providers — though it
+    did **not** reproduce against smtp.seznam.cz, which works on both ports.
+  - Verified locally end to end: cash order → PDF generated → SMTP stub
+    received a correct MIME message whose attachment renders as the right
+    voucher; transfer order → matched by the Fio poll (including from a
+    `0001`-style symbol against a stored `1`), unmatched/underpaid/wrong-KS
+    cases logged without settling; a replayed poll neither re-matched nor
+    re-sent; delivery failure left the order `PAID` with `lastError` and the
+    next cron delivered it; unpaid orders expired and released their symbol;
+    `/admin/orders` filters and auth.
+  - Against **real infrastructure**, the SMTP transport reached
+    `smtp.seznam.cz` on both 465 and 587 — TCP, TLS, greeting, EHLO and the
+    AUTH command all worked, failing only on deliberately wrong credentials
+    (`535 … incorrect credentials`) in ~1.3s.
+  - **Not verified: a real mailbox actually receiving a voucher.** The sandbox
+    has no SMTP credentials, so the final hop is untested. Same caveat as the
+    Fio poll's real network call.
+  - `FIO_API_BASE` exists so the matching can be driven from a stub; the real
+    `fioapi.fio.cz` is unreachable here.
+
+## Review pass (2026-09-14)
+
+A full read-through of `src/` fixed seven things; all verified locally with
+`wrangler dev --local --test-scheduled` against the local D1 and the real
+playground endpoint (test rows deleted afterwards, local `FioState`
+reset — the local DB is back to just the one pre-existing
+`admin-ui-test-1` row):
+
+1. **The Fio poll's throttle never engaged.** `runFioPollIfDue` read
+   `lastRunAt` through a D1-format date parser, but wrote it as
+   `Date.toISOString()` — the parser appended a second `Z`, `new Date()`
+   returned `NaN`, and `NaN < interval` is `false`, so every run polled
+   regardless of `FIO_POLL_INTERVAL_SECONDS`. `sqliteDatetimeMs` now lives
+   once in `db.ts` and accepts both formats. Verified both ways: with a
+   fresh `lastRunAt` the cron skips Fio entirely (51ms, no Fio call); with
+   one 2 minutes old it attempts the fetch.
+2. **`FIO_POLL_INTERVAL_SECONDS` default lowered 60 → 45** (and the
+   `wrangler.jsonc` var with it). Now that the throttle works, a value ≥ the
+   60s cron tick would skip roughly every other tick to jitter.
+3. **Neither outbound `fetch` had a timeout** — a hung EET endpoint held
+   `/report` (and the whole cron batch behind it) open, and per the note
+   below the Fio endpoint hangs indefinitely in this sandbox. Both now use
+   `AbortSignal.timeout` (10s EET, 15s Fio); verified — the Fio call aborts
+   at 15.09s, records `lastError`, and the cron still returns 200.
+4. **`markAttemptFailed` could clobber a concurrent `SENT`.** It set
+   `status = 'PENDING'` unconditionally, so a cron retry losing a race with
+   a `/report` attempt that had just succeeded would re-open an
+   already-registered sale. Now guarded with `AND status = 'PENDING'`.
+5. **The 48h deadline was measured from `createdAt`, not the sale.** It's
+   now a set-based `expireOverdue()` sweep on `dat_trzby`, run before the
+   retry batch — so it no longer depends on the row making it into a batch
+   (it couldn't, at scale), and a late-noticed Fio transfer doesn't get a
+   fresh 48h. Verified on all four boundary cases: `datTrzby` old (in both
+   the D1 and ISO-with-`Z` formats) → `EXPIRED` even with a fresh
+   `createdAt`; `datTrzby` fresh → registered normally even with a 72h-old
+   `createdAt` (the old code expired that one).
+6. **The Fio poll ignored the currency.** It reported any positive amount as
+   CZK; `column14` (`Měna`) is now checked and non-CZK transactions are
+   skipped with a log line. `dat_trzby` for Fio transactions now comes from
+   the bank's own `Datum` (column0) instead of "now" — note that column is
+   epoch **milliseconds** in the JSON API, not the `"YYYY-MM-DD+HH:MM"`
+   string the XML API uses. Transactions with no `ID pohybu` are skipped
+   (they'd all have collapsed onto the single `fio-` reference row).
+7. **An unexpected throw from `/report` escaped as Workers' bare 500 page**
+   (e.g. `reportSale`'s `internal_error`); the handler is now wrapped and
+   answers `500 {"error":"internal_error"}` like every other error path.
+
+One caveat carried over: **the Fio transaction *parsing* still isn't
+verified end-to-end** — the sandbox blocks `fioapi.fio.cz`, so the abort
+above is the furthest the path has been exercised. The column mapping was
+re-checked against the official "Struktura TransactionList" table
+(column0=Datum, 1=Objem, 4=KS, 5=VS, 10=Název protiúčtu, 14=Měna,
+16=Zpráva pro příjemce, 22=ID pohybu — the code's indices are correct), but
+a real token on a deployed Worker is still the first true test of it.
 
 ## Known gaps / next steps
 
@@ -109,7 +232,28 @@ Carried over from the source repo (still true, code unchanged) unless noted:
 5. **Cron retry batch is capped at 20 `PENDING` rows per run** — unrelated
    to the Fio poll (which has its own separate per-poll transaction loop,
    uncapped since Fio's own bookmark already bounds it to "new since last
-   call").
+   call"). The batch is ordered least-attempted-first (see `listPending`), so
+   a backlog larger than one batch now round-robins instead of retrying the
+   same 20 oldest rows until they expire — but the *cap* is still 20, so a
+   genuinely huge backlog (thousands of rows) means proportionally slower
+   retries for everyone in it.
+6. **`POST /voucher` only *renders* a voucher** — it registers nothing and
+   reserves no number; two callers can mint the same one. Use
+   `POST /voucher/order` if the number should be reserved and the sale
+   delivered (it enforces uniqueness). The blanks' coordinates are also
+   hardcoded against one template file (see "Current status"), with no
+   automated check that they still line up.
+7. **Voucher orders are not registered with EET by the order flow itself.**
+   The money still reaches EET through the ordinary per-credit Fio poll
+   (`fio-<idPohyb>`), and cash voucher sales are the app's own business to
+   `/report` as it always was — but nothing checks that the two actually
+   happened, so a voucher can be delivered for a payment that then failed to
+   register. Worth a look if vouchers turn out to be a large share of revenue.
+8. **Nothing consumes `POST /voucher/order` yet.** The Android app has the
+   voucher category, the `voucherNumber` field and the KS setting, but no
+   customer e-mail field — that has to be added on the app side before the
+   endpoint can be called for real, and the app must send the same KS it puts
+   in the payment QR (or the Worker's `VOUCHER_KS` must match it).
 6. **New, specific to the Fio poll:** if this Worker ever ends up behind a
    consuming app that *also* calls `/report` for the same bank transfers
    (order-matched, like stena-letnak's own Fio poll does), the two need to

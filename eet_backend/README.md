@@ -11,10 +11,20 @@ cron-driven poll picks up every new incoming bank transfer and registers it
 with EET automatically, with no consuming app required — see "Fio Banka
 polling" below.
 
+It can also render gift vouchers: `POST /voucher` fills the blank voucher
+template with an amount, a voucher number, and a computed validity date —
+see "Gift vouchers" below.
+
+And it can take *orders* for them: `POST /voucher/order` records a sale, then
+matches the incoming bank transfer (or takes the cash sale as paid up front),
+generates the voucher and e-mails it to the customer — see "Voucher orders and
+delivery" below.
+
 This project started as a copy of the `eet` Worker built for the
 stena-letnak climbing-wall app (same signing/retry core); the Fio poll is
 new here and is *not* tied to stena-letnak's own payment-matching logic — it
-reports every incoming credit on its own, keyed by Fio's transaction id.
+reports every incoming credit on its own, keyed by Fio's transaction id, and
+settles voucher orders along the way.
 
 **Status: verified against the official playground only.** EET 2.0 is not
 yet in force as law (see the design discussion this repo grew out of) — do
@@ -46,8 +56,20 @@ which revenue streams are even in scope.
      cron stops retrying it and marks it `EXPIRED` — a silent infinite
      retry loop past the legal deadline isn't useful, and this is the
      point a human actually needs to look at `lastErrorMessage` (bug in
-     `xmlsign.ts`, wrong `EET_EIC`, or a multi-day outage).
+     `xmlsign.ts`, wrong `EET_EIC`, or a multi-day outage). The age is
+     measured from `dat_trzby` — the sale itself — not from when the row
+     was created, so a payment that only gets noticed late (the Fio poll
+     running after an outage) does not get a fresh 48h from the moment it
+     was finally seen. This sweep is independent of the retry batch below,
+     so a row can never be starved out of expiring.
 4. `GET /status/:reference` — look up the current state of a report.
+
+Each cron run retries a batch of 20 `PENDING` rows, least-attempted first
+rather than oldest first: during a long EET outage the queue can grow past
+one batch, and an oldest-first batch would retry the same 20 rows every
+minute while the rest waited behind them. Ordering by attempt count
+round-robins through the whole queue instead (ties break on id, so rows are
+still drained oldest-first within an equal-attempt cohort).
 
 `REJECTED` still exists as a status value only for rows written before this
 retry-everything policy — new code never produces it.
@@ -112,6 +134,8 @@ npx wrangler secret put EET_CERT_PEM         < path/to/cert.pem
 npx wrangler secret put EET_PRIVATE_KEY_PEM  < path/to/key-pkcs8.pem
 npx wrangler secret put FIO_TOKEN            # optional — enables the Fio poll, see below
 npx wrangler secret put ADMIN_PASSWORD       # optional — enables login on GET /admin, see below
+npx wrangler secret put SMTP_USER            # optional — enables voucher e-mails, see below
+npx wrangler secret put SMTP_PASSWORD
 ```
 
 Non-sensitive config lives in `wrangler.jsonc`'s `vars` block (EIC, till
@@ -181,21 +205,45 @@ With `FIO_TOKEN` set, `scheduled()` (the same every-minute cron that retries
    to EET via the same `reportSale()` logic `POST /report` uses, keyed by
    `fio-<idPohyb>` (Fio's own transaction id) as the reference — so a
    transaction already seen on a previous poll, or retried after a partial
-   failure, is never double-registered. Outgoing/debit transactions
-   (negative amount) are skipped.
+   failure, is never double-registered. Three kinds of transaction are
+   skipped instead, each with a `console.error` line:
+   - outgoing/debit transactions (negative amount) — not revenue;
+   - anything whose `Měna` (column14) isn't `CZK` — EET's `celk_trzba` is
+     always koruna and there's no exchange rate here, so a foreign-currency
+     credit is *not* reported at its face amount as if it were;
+   - anything without an `ID pohybu` (column22) — there'd be no stable
+     reference to key on, and every such transaction would collapse onto the
+     same `fio-` row.
+   Each reported credit also gets one `console.log` line naming the payer and
+   variable symbol (Fio's `Název protiúčtu`/`VS`/`Zpráva pro příjemce`),
+   which is the only place those ever surface — EET has nowhere to put them
+   and only the reference is kept in D1.
+   `dat_trzby` is taken from the bank's own posting date (`Datum`, column0)
+   rather than "now", so the sale is registered at the time it actually
+   happened — see the 48h deadline above.
 3. Actually polling Fio is throttled to at most once every
-   `FIO_POLL_INTERVAL_SECONDS` (30s floor, 60s default if unset/invalid) —
-   state lives in the single-row `FioState` D1 table (`migrations/0002_fio_state.sql`).
+   `FIO_POLL_INTERVAL_SECONDS` — state lives in the single-row `FioState` D1
+   table (`migrations/0002_fio_state.sql`). The floor is 30s, which is Fio's
+   own hard limit per token (exceeding it is answered with HTTP 409); the
+   default is 45s, deliberately below the 60s cron tick, because the throttle
+   compares against the *previous run* — an interval of 60s or more would
+   lose roughly every other tick to cron jitter and silently halve the real
+   poll rate. `POST /fio/poll` bypasses the throttle entirely.
 
-**This Worker has no concept of "which order was this payment for"** — that
-requires a consuming app matching by variable symbol against its own orders
-(see stena-letnak's own Fio poll, `src/lib/fio.ts` in that repo, which does
-exactly that before falling back to reporting only *unmatched* credits).
-Here, every incoming credit is real revenue and gets reported as-is. If this
-Worker is ever wired up behind an app that *also* calls `POST /report`
-itself for the same bank transfer (e.g. on order confirmation), make sure
-only one side reports each transaction — reporting the same money twice
-under two different references would double-count it with EET.
+The poll also **settles voucher orders** whose variable symbol, amount and
+constant symbol all match the payment — that is what triggers the voucher PDF
+and its e-mail. See "Voucher orders and delivery" above. An order match does not
+change the EET side: the credit is still registered as revenue.
+
+Every incoming CZK credit is revenue and gets reported as-is, whether or not it
+settles an order. If this Worker is ever wired up behind an app that *also*
+calls `POST /report` itself for the same bank transfer (e.g. on order
+confirmation), make sure only one side reports each transaction — reporting the
+same money twice under two different references would double-count it with EET.
+
+For local testing, `FIO_API_BASE` overrides the Fio API root. Pointing it at a
+stub is the only way to exercise order matching without real bank traffic — the
+sandbox this was developed in can't reach `fioapi.fio.cz` at all.
 
 `GET /fio/status` (Bearer auth: `EET_API_TOKEN` or `ADMIN_PASSWORD`) →
 `{ enabled, lastRunAt, lastReportedCount, lastError, lastErrorAt, updatedAt }`
@@ -209,12 +257,141 @@ if `FIO_TOKEN` isn't set. This is what the `/admin` dashboard's "Zkontrolovat
 Fio teď" button calls; also useful for verifying a deployment without
 waiting for the next cron tick.
 
+## Gift vouchers
+
+**`POST /voucher`** (Bearer auth: `EET_API_TOKEN`, the same credential the
+Android app sends to `/report`) → an `application/pdf` attachment: the
+voucher template with the amount, the voucher number, and a validity date
+filled in.
+
+```json
+{ "amountCzk": 1200, "voucherNumber": "250315" }
+```
+
+- **Valid until** is always computed, never passed: today in Europe/Prague
+  plus 6 months, matching the template's own "Platnost poukazu je 6 měsíců
+  od data vystavení". Month-end clamps rather than overflowing — a voucher
+  issued on 31 August is valid until 28 (or 29) February.
+- **The amount** is drawn right-aligned so it always touches the template's
+  own ",-Kč". The blank in the title is four digits wide at 18pt; a larger
+  amount is drawn proportionally smaller rather than allowed to run into the
+  "HODNOTĚ" in front of it. Whole crowns are the intended use — haléře are
+  rendered (with a Czech decimal comma) rather than silently dropped, but
+  read oddly against that ",-Kč".
+- **The number** is printed as given. It is conventionally the same number
+  the app puts in the payment's variable symbol.
+- Row `404`/`400` behaviour matches the rest of the API: `400
+  {"error":"..."}` for a missing or non-positive `amountCzk`/empty
+  `voucherNumber`, `401` without a token.
+
+The template lives in `assets/poukazka.pdf` and is bundled into the Worker as
+a binary Data module (`rules` in wrangler.jsonc — note the broad glob and
+`fallback: true` both being load-bearing). It is the *blank* voucher: its
+three values are blanks in its own text runs, so the endpoint draws into them
+and the labels, layout, and artwork are untouched. `poukazka-original.pdf` in
+the repo root is the filled-in specimen the blank was derived from, kept for
+reference; it is not bundled.
+
+`src/lib/voucher.ts` also exports the pieces separately —
+`fillVoucher(params, template?)` (the template defaults to the bundled one,
+so tests can pass bytes), `computeValidUntil(issuedOn?)`, `addMonths`, and
+`pragueToday` — none of which need a Worker runtime.
+
+## Voucher orders and delivery
+
+Rendering a voucher is one thing; getting it to the customer is another. The
+app sells a voucher, the customer pays, and somebody has to connect the two.
+That is what an order does.
+
+**`POST /voucher/order`** (Bearer auth: `EET_API_TOKEN` — the app's existing
+credential) creates the order:
+
+```json
+{ "amountCzk": 1500, "variableSymbol": "260914", "email": "jan@example.com",
+  "cash": false, "constantSymbol": "0308" }
+```
+
+```json
+201 { "id": 1, "variableSymbol": "260914", "amountCzk": "1500.00",
+      "constantSymbol": "308", "email": "jan@example.com",
+      "paymentMethod": "TRANSFER", "status": "PENDING",
+      "createdAt": "…", "paidAt": null, "sentAt": null, "lastError": null }
+```
+
+The **variable symbol is the voucher number** — that is what the customer's
+payment carries and what gets printed on the PDF — so a symbol can only be used
+by one live order (a database index enforces it, not a check-then-insert, so two
+concurrent calls can't both win). `409 variable_symbol_already_used` otherwise.
+
+**What happens next depends on `cash`:**
+
+| | `cash: false` (default) — bank transfer | `cash: true` — paid at the counter |
+|---|---|---|
+| Created as | `PENDING` | `PAID` |
+| Voucher sent | when the Fio poll matches the payment | immediately, in the same request |
+| Typical reply | `201 … "status": "PENDING"` | `201 … "status": "SENT"` |
+| `constantSymbol` | required (from the call, else `VOUCHER_KS`) | not used |
+
+Cash orders are created `PAID` rather than `PENDING` on purpose: if the Worker
+died between writing the row and sending the mail, a `PENDING` order would sit
+waiting for a bank payment that is never coming, and expire. As `PAID` it lands
+in the delivery retry queue instead.
+
+**A failed delivery is not a failed request.** If the mail cannot be sent, the
+order stays `PAID` with `lastError` set, the reply still says `201`, and the
+every-minute cron keeps retrying until it goes out. The dashboard shows which
+ones are stuck and why.
+
+**Matching a transfer** happens in the Fio poll (`src/lib/fio.ts`), on the
+normalized variable symbol, and then requires **all three** of the amount, the
+symbol and the constant symbol to line up. Symbols are compared with leading
+zeros stripped, because the bank hands back `0007` for a symbol recorded as `7`
+— a naive string compare would mean that payment never matched. When a symbol
+matches but the amount or KS does not, it is logged loudly (an underpayment is
+exactly the case where the customer thinks they have paid and nobody would
+otherwise notice) and the order stays `PENDING` until it expires.
+
+Matching is **in addition to** the ordinary EET registration, not instead of it:
+the credit is still registered under `fio-<idPohyb>` as always. The voucher is
+delivery on top of the revenue record.
+
+Unpaid orders expire after `VOUCHER_ORDER_TTL_DAYS` (default 30) and release
+their variable symbol for reuse.
+
+### SMTP configuration
+
+Outgoing mail goes over `cloudflare:sockets`, because Workers have no usable
+e-mail library — `nodemailer` needs node's `net`/`tls`, which workerd doesn't
+provide (see `src/lib/smtp.ts`).
+
+```bash
+npx wrangler secret put SMTP_USER
+npx wrangler secret put SMTP_PASSWORD
+```
+
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_FROM`, `SMTP_FROM_NAME` live in
+`wrangler.jsonc`'s `vars`. **Use port 465 with `SMTP_SECURE=tls`**: there is an
+open workerd bug with `startTls()` on 587 (workerd#2712) that hangs some
+providers. It did not reproduce against smtp.seznam.cz, which works on both, so
+`SMTP_SECURE=starttls` is a supported fallback — just not the default.
+
+`SMTP_FROM` should be on the same domain as the authenticated account. The
+Worker is a *submission* client — it hands the message to your provider, which
+relays and signs it — so SPF and DKIM line up as long as the two match. A `From:`
+on an unrelated domain will be the one thing that lands these in spam.
+
+The Worker needs no inbound mail setup and no DNS records of its own.
+
+`SMTP_SECURE=none` (plaintext) exists only for pointing local runs at a stub;
+it puts credentials on the wire in the clear and is not for any real mailbox.
+
 ## API
 
-`POST /report` and `GET /status/:reference` require `Authorization: Bearer
-<EET_API_TOKEN>`. `GET /admin/data`, `GET /fio/status`, and `POST /fio/poll`
-accept either `EET_API_TOKEN` or `ADMIN_PASSWORD` — see "Admin dashboard"
-below.
+`POST /report`, `GET /status/:reference`, `POST /voucher`, and
+`POST /voucher/order` require `Authorization: Bearer <EET_API_TOKEN>`.
+`GET /admin/data`, `GET /admin/orders`, `GET /fio/status`, and
+`POST /fio/poll` accept either `EET_API_TOKEN` or `ADMIN_PASSWORD` — see
+"Admin dashboard" below.
 
 **`POST /report`**
 ```json
@@ -233,7 +410,7 @@ replaying a stored row — always includes `pok`, `test`, and `errorCode`
 |---|---|
 | `200 { reference, status: "sent", pok, test, errorCode: null }` | Registered — `test: true` on the playground |
 | `202 { reference, status: "pending", pok: null, test: false, errorCode }` | Not registered yet (any failure reason) — queued for the every-minute cron retry, up to the 48h deadline |
-| `410 { reference, status: "expired", pok: null, test: false, errorCode, errorMessage }` | Still unregistered 48h after the sale (ZoET's offline-mode deadline) — cron gave up, needs manual follow-up |
+| `410 { reference, status: "expired", pok: null, test: false, errorCode, errorMessage }` | Still unregistered 48h after `dat_trzby` (the sale; ZoET's offline-mode deadline) — cron gave up, needs manual follow-up |
 | `409 { reference, status: "rejected", pok: null, test: false, errorCode, errorMessage? }` | Legacy only — a row written before this policy; new code never produces this |
 
 **`GET /status/:reference`** → full row (`status`, `pok`, `test`,

@@ -81,8 +81,21 @@ export async function attemptSubmit(env: EetEnv, row: EetSaleRow, prvniZaslani: 
  * both paths get the exact same idempotent find-or-insert + immediate-attempt
  * behavior — resubmitting the same reference either replays the stored
  * result or retries immediately, never double-registers.
+ *
+ * `opts.datTrzby` lets a caller that knows the real sale time pass it in
+ * instead of defaulting to "now" — the Fio poll does, since a bank transfer
+ * carries the bank's own posting date and the sale it represents may be
+ * hours or days older than the poll that noticed it. It only applies when
+ * this call is the one creating the row: on an existing row the stored
+ * `datTrzby` always wins, because it's part of the composite EET uses to
+ * recognize a resubmission of the same sale (see README).
  */
-export async function reportSale(env: EetEnv, reference: string, amountCzk: string): Promise<ReportOutcome> {
+export async function reportSale(
+  env: EetEnv,
+  reference: string,
+  amountCzk: string,
+  opts: { datTrzby?: string } = {},
+): Promise<ReportOutcome> {
   let row = await db.findByReference(env.DB, reference);
   let isNew = false;
   if (!row) {
@@ -93,7 +106,7 @@ export async function reportSale(env: EetEnv, reference: string, amountCzk: stri
         eic: env.EET_EIC,
         idJednotky: env.EET_ID_JEDNOTKY,
         idPokl: env.EET_ID_POKL,
-        datTrzby: nowIso(),
+        datTrzby: opts.datTrzby ?? nowIso(),
       });
       isNew = true;
     } catch {

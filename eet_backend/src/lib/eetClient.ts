@@ -17,6 +17,13 @@ export interface EetSubmitResult {
 
 const SOAP_ACTION = '"http://fs.gov.cz/eet/OdeslaniTrzby"';
 
+/**
+ * An unresponsive EET endpoint must not hold the caller (and, in the cron
+ * path, the whole retry batch behind it) open indefinitely — a timed-out
+ * request is just another failed attempt, and gets retried like any other.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+
 export async function submitToEet(envelopeXml: string, endpoint: string): Promise<EetSubmitResult> {
   let text: string;
   try {
@@ -24,6 +31,7 @@ export async function submitToEet(envelopeXml: string, endpoint: string): Promis
       method: "POST",
       headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: SOAP_ACTION },
       body: envelopeXml,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     text = await res.text();
   } catch (err) {

@@ -1,5 +1,21 @@
 export type EetStatus = "PENDING" | "SENT" | "REJECTED" | "EXPIRED";
 
+/**
+ * Parses either timestamp format this schema stores, in ms since epoch.
+ *
+ * Two formats coexist on purpose: D1's `datetime('now')` yields
+ * "YYYY-MM-DD HH:MM:SS" (space-separated, UTC, no zone suffix) and is what
+ * `createdAt`/`updatedAt` use, while anything this Worker generates in JS
+ * (`nowIso()`, `Date.toISOString()`) is full ISO 8601 ending in "Z". Feeding
+ * the ISO form to a D1-format-only parser appends a second "Z" and yields
+ * `NaN` — which silently disables any comparison it feeds rather than
+ * throwing, so both forms are accepted here.
+ */
+export function sqliteDatetimeMs(s: string): number {
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s) ? s : `${s.replace(" ", "T")}Z`;
+  return new Date(normalized).getTime();
+}
+
 export type EetSaleRow = {
   id: number;
   reference: string;
@@ -49,22 +65,46 @@ export async function markSent(db: D1Database, id: number, pok: string, test: bo
  * Records a failed attempt. Status always stays (or becomes) `PENDING` —
  * every failure, whether transient or an EET protocol-level rejection, is
  * retried until either it succeeds or the 48h ZoET deadline hits (see
- * `markExpired`). The caller (stena-letnak) has no way to act on an
+ * `expireOverdue`). The caller (stena-letnak) has no way to act on an
  * immediate hard failure anyway, so there's no early-exit "give up now"
  * path anymore; `REJECTED` is kept in `EetStatus` only to read back rows
  * written before this change.
+ *
+ * The `status = 'PENDING'` guard matters: a cron retry and a `POST /report`
+ * retry can be in flight for the same row at the same time, and without it a
+ * loser of that race would clobber a `markSent` written moments earlier back
+ * to `PENDING`, re-submitting an already-registered sale. Guards against
+ * `SENT`/`EXPIRED` (a terminal state always wins).
  */
 export async function markAttemptFailed(db: D1Database, id: number, errorCode: number | null, errorMessage: string | null): Promise<void> {
   await db
     .prepare(
-      `UPDATE EetSale SET status = 'PENDING', attempts = attempts + 1, lastErrorCode = ?, lastErrorMessage = ?, updatedAt = datetime('now') WHERE id = ?`,
+      `UPDATE EetSale SET status = 'PENDING', attempts = attempts + 1, lastErrorCode = ?, lastErrorMessage = ?, updatedAt = datetime('now') WHERE id = ? AND status = 'PENDING'`,
     )
     .bind(errorCode, errorMessage, id)
     .run();
 }
 
+/**
+ * The next batch of rows for the cron to retry, least-attempted first.
+ *
+ * Ordering by `attempts` rather than `id` is what stops one poisoned row (or
+ * a whole batch of them, e.g. during a multi-hour EET outage) from
+ * monopolizing every run: with N pending rows and a batch of B, ordering by
+ * id would retry the same B oldest rows every minute and never touch the
+ * other N-B until the first ones expire, while ordering by attempts
+ * round-robins through the whole set. Ties break on id so rows are still
+ * drained oldest-first within an equal-attempt cohort.
+ *
+ * Rows past the 48h deadline are taken out of `PENDING` by `expireOverdue`
+ * before this runs, so they can't be starved out of ever expiring by having
+ * the highest attempt count.
+ */
 export async function listPending(db: D1Database, limit: number): Promise<EetSaleRow[]> {
-  const result = await db.prepare(`SELECT * FROM EetSale WHERE status = 'PENDING' ORDER BY id ASC LIMIT ?`).bind(limit).all<EetSaleRow>();
+  const result = await db
+    .prepare(`SELECT * FROM EetSale WHERE status = 'PENDING' ORDER BY attempts ASC, id ASC LIMIT ?`)
+    .bind(limit)
+    .all<EetSaleRow>();
   return result.results;
 }
 
@@ -94,20 +134,42 @@ export async function listFiltered(db: D1Database, filter: EetListFilter): Promi
   return result.results;
 }
 
+const EXPIRED_MESSAGE =
+  "Missed the 48h legal reporting deadline (ZoET offline-mode limit) without a successful registration; needs manual follow-up.";
+
 /**
- * Gives up on automatic retry: the ZoET-mandated 48h window (offline-mode
- * reporting deadline, counted from the sale itself) has passed without a
- * successful registration. Row drops out of `listPending` (cron stops
- * touching it) but stays queryable via /status for manual follow-up —
- * same treatment as REJECTED, just a different root cause.
+ * Gives up on automatic retry for every row past the ZoET-mandated
+ * `olderThanHours` window (offline-mode reporting deadline, counted from the
+ * sale itself). Expired rows drop out of `listPending` (the cron stops
+ * touching them) but stay queryable via /status and on the admin dashboard
+ * for manual follow-up — same treatment as REJECTED, just a different root
+ * cause. Returns the references it expired, for the caller to log.
+ *
+ * Deliberately a set-based sweep rather than part of the cron's per-row
+ * retry loop: the retry loop only sees one batch, so a row that never made
+ * it into a batch would never be marked (and so never stop being retried).
+ *
+ * The deadline is measured against `datTrzby` — the sale time — not
+ * `createdAt`, which for the Fio poll is merely when the poll happened to
+ * run; a transfer that arrived while the Worker was down must not get a
+ * fresh 48h from the moment it was finally noticed. `datetime()` parses both
+ * `datTrzby`'s ISO-with-Z form and D1's own, so no JS-side date math is
+ * needed. The `status = 'PENDING'` guard keeps a sale that was registered
+ * between the SELECT and the UPDATE from being flipped to EXPIRED.
  */
-export async function markExpired(db: D1Database, id: number): Promise<void> {
+export async function expireOverdue(db: D1Database, olderThanHours: number): Promise<string[]> {
+  const modifier = `-${olderThanHours} hours`;
+  const condition = `status = 'PENDING' AND datetime(datTrzby) < datetime('now', ?)`;
+
+  const overdue = await db.prepare(`SELECT reference FROM EetSale WHERE ${condition}`).bind(modifier).all<{ reference: string }>();
+  if (overdue.results.length === 0) return [];
+
   await db
-    .prepare(
-      `UPDATE EetSale SET status = 'EXPIRED', lastErrorMessage = 'Missed the 48h legal reporting deadline (ZoET offline-mode limit) without a successful registration; needs manual follow-up.', updatedAt = datetime('now') WHERE id = ?`,
-    )
-    .bind(id)
+    .prepare(`UPDATE EetSale SET status = 'EXPIRED', lastErrorMessage = ?, updatedAt = datetime('now') WHERE ${condition}`)
+    .bind(EXPIRED_MESSAGE, modifier)
     .run();
+
+  return overdue.results.map((row) => row.reference);
 }
 
 export type FioState = {
@@ -136,4 +198,166 @@ export async function updateFioState(
     )
     .bind(patch.lastRunAt, patch.lastReportedCount, patch.lastError, patch.lastErrorAt)
     .run();
+}
+
+export type VoucherOrderStatus = "PENDING" | "PAID" | "SENT" | "EXPIRED" | "CANCELLED";
+export type VoucherPaymentMethod = "TRANSFER" | "CASH";
+
+export type VoucherOrderRow = {
+  id: number;
+  variableSymbol: string;
+  vsNormalized: string;
+  amountCzk: string;
+  constantSymbol: string;
+  email: string;
+  paymentMethod: VoucherPaymentMethod;
+  status: VoucherOrderStatus;
+  fioIdPohyb: string | null;
+  paidAt: string | null;
+  sentAt: string | null;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InsertVoucherOrderParams = {
+  variableSymbol: string;
+  vsNormalized: string;
+  amountCzk: string;
+  constantSymbol: string;
+  email: string;
+  paymentMethod: VoucherPaymentMethod;
+  /** Transfers start `PENDING` (waiting for the bank payment); cash starts `PAID` and is delivered immediately. */
+  status: VoucherOrderStatus;
+};
+
+/** True when `error` is the partial unique index rejecting a second order for the same variable symbol. */
+export function isDuplicateVariableSymbol(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE") && message.includes("vsNormalized");
+}
+
+export async function insertVoucherOrder(db: D1Database, params: InsertVoucherOrderParams): Promise<VoucherOrderRow> {
+  const row = await db
+    .prepare(
+      `INSERT INTO VoucherOrder (variableSymbol, vsNormalized, amountCzk, constantSymbol, email, paymentMethod, status, paidAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'PAID' THEN datetime('now') ELSE NULL END)
+       RETURNING *`,
+    )
+    .bind(
+      params.variableSymbol,
+      params.vsNormalized,
+      params.amountCzk,
+      params.constantSymbol,
+      params.email,
+      params.paymentMethod,
+      params.status,
+      params.status,
+    )
+    .first<VoucherOrderRow>();
+  if (!row) throw new Error("insert into VoucherOrder returned no row");
+  return row;
+}
+
+export async function getVoucherOrder(db: D1Database, id: number): Promise<VoucherOrderRow | null> {
+  const row = await db.prepare("SELECT * FROM VoucherOrder WHERE id = ?").bind(id).first<VoucherOrderRow>();
+  return row ?? null;
+}
+
+/** The `PENDING` order a bank transaction is expected to settle, matched on the normalized variable symbol. */
+export async function findPendingVoucherOrder(db: D1Database, vsNormalized: string): Promise<VoucherOrderRow | null> {
+  const row = await db
+    .prepare(`SELECT * FROM VoucherOrder WHERE vsNormalized = ? AND status = 'PENDING'`)
+    .bind(vsNormalized)
+    .first<VoucherOrderRow>();
+  return row ?? null;
+}
+
+/**
+ * Records the matching bank transaction and moves the order to `PAID`. Guarded
+ * on `PENDING` for the same reason `markAttemptFailed` is: a replayed poll must
+ * not re-open or re-stamp an order that has already moved on.
+ */
+export async function markVoucherPaid(db: D1Database, id: number, fioIdPohyb: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE VoucherOrder SET status = 'PAID', fioIdPohyb = ?, paidAt = datetime('now'), updatedAt = datetime('now')
+       WHERE id = ? AND status = 'PENDING'`,
+    )
+    .bind(fioIdPohyb, id)
+    .run();
+}
+
+export async function markVoucherSent(db: D1Database, id: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE VoucherOrder SET status = 'SENT', sentAt = datetime('now'), attempts = attempts + 1, lastError = NULL, updatedAt = datetime('now') WHERE id = ?`,
+    )
+    .bind(id)
+    .run();
+}
+
+/**
+ * Records a failed *delivery* (the voucher PDF or the e-mail). Status stays
+ * `PAID`: the money did arrive, so this is not the order's problem to lose —
+ * the cron keeps retrying until it goes out.
+ */
+export async function markVoucherSendFailed(db: D1Database, id: number, errorMessage: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE VoucherOrder SET attempts = attempts + 1, lastError = ?, updatedAt = datetime('now') WHERE id = ? AND status = 'PAID'`,
+    )
+    .bind(errorMessage.slice(0, 500), id)
+    .run();
+}
+
+/** Paid orders whose voucher has not gone out yet — the cron's delivery retry queue. */
+export async function listVoucherOrdersToSend(db: D1Database, limit: number): Promise<VoucherOrderRow[]> {
+  const result = await db
+    .prepare(`SELECT * FROM VoucherOrder WHERE status = 'PAID' AND sentAt IS NULL ORDER BY attempts ASC, id ASC LIMIT ?`)
+    .bind(limit)
+    .all<VoucherOrderRow>();
+  return result.results;
+}
+
+/**
+ * Gives up on orders that were never paid: releases the variable symbol (the
+ * partial unique index stops covering `EXPIRED`) so it can be issued again.
+ * Returns how many were expired, for the caller to log.
+ */
+export async function expireVoucherOrders(db: D1Database, olderThanDays: number): Promise<number> {
+  // The message is built here rather than concatenated in SQL, where a bound
+  // number renders as "30.0" and produces "do 30.0 dní".
+  const message = `Unpaid ${olderThanDays} days after ordering; the voucher number is free for reuse.`;
+  const result = await db
+    .prepare(
+      `UPDATE VoucherOrder SET status = 'EXPIRED', lastError = ?, updatedAt = datetime('now')
+       WHERE status = 'PENDING' AND datetime(createdAt) < datetime('now', ?)`,
+    )
+    .bind(message, `-${olderThanDays} days`)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
+export type VoucherOrderFilter = {
+  status: VoucherOrderStatus | "ALL";
+  limit: number;
+};
+
+/** Most recent first — backs the admin dashboard's orders table. */
+export async function listVoucherOrders(db: D1Database, filter: VoucherOrderFilter): Promise<VoucherOrderRow[]> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (filter.status !== "ALL") {
+    conditions.push("status = ?");
+    params.push(filter.status);
+  }
+  params.push(filter.limit);
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await db
+    .prepare(`SELECT * FROM VoucherOrder ${where} ORDER BY id DESC LIMIT ?`)
+    .bind(...params)
+    .all<VoucherOrderRow>();
+  return result.results;
 }

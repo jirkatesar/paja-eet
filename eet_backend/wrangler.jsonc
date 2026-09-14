@@ -3,6 +3,20 @@
 	"name": "eet-backend",
 	"main": "./src/index.ts",
 	"compatibility_date": "2026-08-31",
+	// The voucher template (assets/poukazka.pdf) is imported as a binary Data
+	// module by src/lib/voucher.ts. A rule only affects files that are
+	// actually imported, so the repo's poukazka-original.pdf is never bundled.
+	// The glob has to be this broad: a narrower "assets/*.pdf" is matched
+	// against the resolved path and silently fails to apply, at which point
+	// the build dies with "No loader is configured for .pdf files".
+	"rules": [
+		{
+			"type": "Data",
+			"globs": ["**/*.pdf"],
+			// Also required — without it wrangler ignores the rule entirely.
+			"fallback": true
+		}
+	],
 	// No custom domain route yet — this is a fresh copy of stenatisnov's "eet"
 	// Worker, not that same deployment. Add a `routes` entry (or run `wrangler
 	// deploy` as-is for a *.workers.dev URL) once this project has its own domain.
@@ -24,15 +38,32 @@
 		]
 	},
 	// Non-sensitive playground config — EET_API_TOKEN, EET_CERT_PEM,
-	// EET_PRIVATE_KEY_PEM, FIO_TOKEN, and ADMIN_PASSWORD are set separately via
-	// `wrangler secret put`.
+	// EET_PRIVATE_KEY_PEM, FIO_TOKEN, ADMIN_PASSWORD, SMTP_USER and
+	// SMTP_PASSWORD are set separately via `wrangler secret put`.
 	"vars": {
 		"EET_EIC": "CZ00000019",
 		"EET_ID_JEDNOTKY": "1",
 		"EET_ID_POKL": "POKLADNA1",
 		"EET_ENDPOINT": "https://pg.trzbyeet.gov.cz/eet/services/EETServiceSOAP/v4",
-		// Minimum seconds between Fio polls (clamped to a 30s floor by lib/fio.ts).
-		"FIO_POLL_INTERVAL_SECONDS": "60"
+		// Minimum seconds between Fio polls (clamped to a 30s floor by lib/fio.ts —
+		// Fio answers 409 below that). Deliberately under the 60s cron tick: the
+		// throttle compares against the previous run, so a value of 60 or more
+		// loses roughly every other tick to cron jitter.
+		"FIO_POLL_INTERVAL_SECONDS": "45",
+		// Constant symbol expected on voucher payments, used when POST /voucher/order
+		// doesn't send one. Leave empty to require every caller to send it.
+		"VOUCHER_KS": "",
+		// How long an unpaid voucher order keeps its variable symbol before expiring.
+		"VOUCHER_ORDER_TTL_DAYS": "30",
+		// Outgoing mail for vouchers. SMTP_USER/SMTP_PASSWORD are secrets.
+		// 465 (implicit TLS) is the safer choice on workerd — see the note at the
+		// top of src/lib/smtp.ts. 587 with SMTP_SECURE=starttls also works, but
+		// hits a known workerd bug on some providers.
+		"SMTP_HOST": "",
+		"SMTP_PORT": "465",
+		"SMTP_SECURE": "tls",
+		"SMTP_FROM": "",
+		"SMTP_FROM_NAME": ""
 	},
 	"observability": {
 		"enabled": true

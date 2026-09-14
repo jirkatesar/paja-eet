@@ -46,7 +46,9 @@ export const ADMIN_HTML = `<!doctype html>
   button:disabled { opacity: 0.5; cursor: default; }
 
   section { margin-bottom: 1.5rem; }
+  h2 { font-size: 1rem; margin: 0 0 0.6rem; }
   #fioStatus p { margin: 0.2rem 0; font-size: 0.9rem; }
+  .hint { font-size: 0.8rem; opacity: 0.75; margin: 0 0 0.75rem; }
 
   .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin-bottom: 0.75rem; }
   .filters label { display: flex; flex-direction: column; font-size: 0.8rem; gap: 0.2rem; }
@@ -113,6 +115,39 @@ export const ADMIN_HTML = `<!doctype html>
       </table>
     </div>
   </section>
+
+  <section>
+    <h2>Objednávky poukazek</h2>
+    <div class="filters">
+      <label>Stav
+        <select id="orderStatusFilter">
+          <option value="ALL">Vše</option>
+          <option value="PENDING">PENDING</option>
+          <option value="PAID">PAID</option>
+          <option value="SENT">SENT</option>
+          <option value="EXPIRED">EXPIRED</option>
+          <option value="CANCELLED">CANCELLED</option>
+        </select>
+      </label>
+      <label>Limit <input type="number" id="orderLimit" value="50" min="1" max="500" /></label>
+      <button id="ordersRefreshBtn">Obnovit</button>
+    </div>
+    <p class="hint">
+      <code>PENDING</code> čeká na platbu, <code>PAID</code> je zaplaceno a poukaz se
+      doposílá, <code>SENT</code> doručeno.
+    </p>
+    <div id="ordersTableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Č. poukazu</th><th>Stav</th><th>Platba</th><th>Částka (Kč)</th><th>E-mail</th>
+            <th>Vytvořeno</th><th>Zaplaceno</th><th>Odesláno</th><th>Pokusy</th><th>Chyba</th>
+          </tr>
+        </thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+  </section>
 </div>
 
 <script>
@@ -134,6 +169,10 @@ export const ADMIN_HTML = `<!doctype html>
   var dateFromInput = document.getElementById("dateFrom");
   var dateToInput = document.getElementById("dateTo");
   var limitInput = document.getElementById("limit");
+  var ordersBody = document.getElementById("ordersBody");
+  var orderStatusFilter = document.getElementById("orderStatusFilter");
+  var orderLimitInput = document.getElementById("orderLimit");
+  var ordersRefreshBtn = document.getElementById("ordersRefreshBtn");
 
   function getToken() {
     return localStorage.getItem(STORAGE_KEY) || "";
@@ -269,13 +308,61 @@ export const ADMIN_HTML = `<!doctype html>
     });
   }
 
+  function renderOrders(rows) {
+    ordersBody.textContent = "";
+    if (rows.length === 0) {
+      var tr = document.createElement("tr");
+      var td = document.createElement("td");
+      td.colSpan = 10;
+      td.textContent = "Žádné objednávky.";
+      tr.appendChild(td);
+      ordersBody.appendChild(tr);
+      return;
+    }
+    rows.forEach(function (row) {
+      var tr = document.createElement("tr");
+      [
+        row.variableSymbol,
+        row.status,
+        row.paymentMethod === "CASH" ? "hotovost" : "převod",
+        row.amountCzk,
+        row.email,
+        row.createdAt,
+        row.paidAt || "—",
+        row.sentAt || "—",
+        String(row.attempts),
+        row.lastError || "—",
+      ].forEach(function (text) {
+        var td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      ordersBody.appendChild(tr);
+    });
+  }
+
+  function loadOrders() {
+    var params = new URLSearchParams();
+    params.set("status", orderStatusFilter.value);
+    if (orderLimitInput.value) params.set("limit", orderLimitInput.value);
+    return authFetch("/admin/orders?" + params.toString()).then(function (res) {
+      if (res.status === 401) { showLogin("Heslo přestalo platit, přihlas se znovu."); throw new Error("unauthorized"); }
+      return res.json();
+    }).then(function (data) {
+      renderOrders(data.rows || []);
+    });
+  }
+
   function loadAll() {
     loadFioStatus().catch(function () {});
     loadRows().catch(function () {});
+    loadOrders().catch(function () {});
   }
 
   refreshBtn.addEventListener("click", loadAll);
   statusFilter.addEventListener("change", loadRows);
+  ordersRefreshBtn.addEventListener("click", loadOrders);
+  orderStatusFilter.addEventListener("change", loadOrders);
 
   pollBtn.addEventListener("click", function () {
     pollBtn.disabled = true;
