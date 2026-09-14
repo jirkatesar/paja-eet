@@ -382,8 +382,11 @@ on an unrelated domain will be the one thing that lands these in spam.
 
 The Worker needs no inbound mail setup and no DNS records of its own.
 
-`SMTP_SECURE=none` (plaintext) exists only for pointing local runs at a stub;
-it puts credentials on the wire in the clear and is not for any real mailbox.
+`SMTP_SECURE=none` (plaintext) exists only for pointing local runs at a stub on
+the same machine, and `sendMail` **enforces** that: it refuses to open an
+unencrypted connection to anything that isn't a loopback address, so a
+misconfiguration cannot put the mailbox password — or a customer's voucher — on
+the wire in the clear. There is deliberately no override flag.
 
 ## API
 

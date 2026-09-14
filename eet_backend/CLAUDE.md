@@ -139,6 +139,16 @@ see "Voucher orders" in Current status and the README.
   - **Use port 465** (`SMTP_SECURE=tls`). Workerd has an open bug with
     `startTls()` on 587 (workerd#2712) that hangs some providers — though it
     did **not** reproduce against smtp.seznam.cz, which works on both ports.
+  - **Certificate validation is enforced** by the runtime, verified rather than
+    assumed: against a self-signed cert the client completed the TLS handshake
+    and then sent *nothing* (the server logged no SMTP data at all), whereas
+    against a valid cert it carried on to AUTH. So a bad certificate fails
+    closed.
+  - **`SMTP_SECURE=none` is refused for any non-loopback host** (checked in
+    `sendMail` before a connection is opened), so a misconfiguration cannot put
+    the mailbox password, or a customer's voucher, on the wire in clear.
+    Verified all three ways: remote host refused in ~0.1s, loopback stub still
+    works, and `tls` is unaffected by the guard.
   - Verified locally end to end: cash order → PDF generated → SMTP stub
     received a correct MIME message whose attachment renders as the right
     voucher; transfer order → matched by the Fio poll (including from a

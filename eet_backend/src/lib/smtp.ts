@@ -270,10 +270,23 @@ async function authenticate(session: SmtpSession, config: SmtpConfig, capabiliti
   throw new Error(`no supported AUTH mechanism offered (${mechanisms.join(", ") || "none advertised"})`);
 }
 
+/** Distinguishable from a transport failure, so the two can be reported differently. */
+class SmtpTimeoutError extends Error {}
+
+/**
+ * Hosts where an unencrypted connection cannot leave the machine. Plaintext SMTP
+ * is only ever acceptable against one of these — a stub on the developer's own
+ * laptop — which is what `SMTP_SECURE=none` exists for.
+ */
+function isLoopback(host: string): boolean {
+  const bare = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return bare === "localhost" || bare === "::1" || /^127\.\d+\.\d+\.\d+$/.test(bare);
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     promise,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms)),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new SmtpTimeoutError(`timed out after ${ms}ms`)), ms)),
   ]);
 }
 
@@ -288,6 +301,18 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * `lastError` on the dashboard.
  */
 export async function sendMail(config: SmtpConfig, message: MailMessage, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
+  // Checked before anything is opened: unencrypted SMTP to a real server would
+  // put the mailbox password on the wire in the clear, and would send the
+  // customer's voucher the same way. Only a loopback stub may do that, and
+  // there is deliberately no override — a real mailbox that "needs" plaintext
+  // needs a different provider, not a config flag.
+  if (config.security === "none" && !isLoopback(config.host)) {
+    throw new Error(
+      `refusing to send unencrypted to ${config.host} — SMTP_SECURE=none is only for a local test server, ` +
+        `use tls (port 465) or starttls (port 587)`,
+    );
+  }
+
   try {
     await attemptSendMail(config, message, timeoutMs);
   } catch (err) {
@@ -301,9 +326,22 @@ async function attemptSendMail(config: SmtpConfig, message: MailMessage, timeout
   const session = new SmtpSession(connect({ hostname: config.host, port: config.port }, { allowHalfOpen: false, secureTransport }));
 
   try {
+    // Everything before the server's greeting is TCP and TLS, and it is where
+    // the runtime's errors are at their most useless: a refused connection, an
+    // untrusted certificate and a dropped handshake all arrive as the same bare
+    // "Stream was cancelled." Reporting it as a connection/TLS problem — which
+    // is what it always is at this stage — is the difference between an operator
+    // checking SMTP_HOST and one checking whether their certificate is valid.
+    try {
+      await withTimeout(session.greeting(), timeoutMs);
+    } catch (err) {
+      if (err instanceof SmtpTimeoutError) throw err;
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`no greeting from the server — connection or TLS (${config.security}) failed: ${detail}`);
+    }
+
     await withTimeout(
       (async () => {
-        await session.greeting();
         let capabilities = await sayEhlo(session, config);
 
         if (config.security === "starttls") {

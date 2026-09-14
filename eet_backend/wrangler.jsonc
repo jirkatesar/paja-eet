@@ -56,14 +56,16 @@
 		// How long an unpaid voucher order keeps its variable symbol before expiring.
 		"VOUCHER_ORDER_TTL_DAYS": "30",
 		// Outgoing mail for vouchers. SMTP_USER/SMTP_PASSWORD are secrets.
-		// 465 (implicit TLS) is the safer choice on workerd — see the note at the
-		// top of src/lib/smtp.ts. 587 with SMTP_SECURE=starttls also works, but
-		// hits a known workerd bug on some providers.
-		"SMTP_HOST": "",
+		// Port and SMTP_SECURE must agree: 465 speaks TLS from the first byte
+		// ("tls"), 587 expects an upgrade ("starttls"). Pairing them the other way
+		// round fails inside the handshake — lib/voucherOrder.ts now rejects that
+		// combination outright. 465 avoids the open workerd bug in startTls()
+		// (workerd#2712), so it is the default here.
+		"SMTP_HOST": "smtp.gmail.com",
 		"SMTP_PORT": "465",
 		"SMTP_SECURE": "tls",
-		"SMTP_FROM": "",
-		"SMTP_FROM_NAME": ""
+		"SMTP_FROM": "jirka.tesar@gmail.com",
+		"SMTP_FROM_NAME": "Jirka Tesar"
 	},
 	"observability": {
 		"enabled": true

@@ -49,10 +49,23 @@ export function normalizeSymbol(value: string): string {
 
 function parseSecurity(value: string | undefined, port: number): SmtpSecurity {
   const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "tls" || normalized === "starttls" || normalized === "none") return normalized;
-  if (normalized) throw new Error(`SMTP_SECURE must be tls, starttls or none (got "${value}")`);
+  if (normalized && normalized !== "tls" && normalized !== "starttls" && normalized !== "none") {
+    throw new Error(`SMTP_SECURE must be tls, starttls or none (got "${value}")`);
+  }
   // 465 speaks TLS from the first byte, 587 upgrades via STARTTLS.
-  return port === 587 ? "starttls" : "tls";
+  const security: SmtpSecurity = (normalized as SmtpSecurity) || (port === 587 ? "starttls" : "tls");
+
+  // Pairing these the other way round is the classic submission mistake, and it
+  // fails inside the TLS handshake — where the runtime reports nothing more
+  // useful than "Stream was cancelled." Naming the fix here costs nothing and
+  // saves reading a port table at the worst possible moment.
+  if (port === 587 && security === "tls") {
+    throw new Error("SMTP_PORT 587 expects STARTTLS — set SMTP_SECURE=starttls, or switch to port 465 with tls");
+  }
+  if (port === 465 && security === "starttls") {
+    throw new Error("SMTP_PORT 465 speaks TLS from the first byte — set SMTP_SECURE=tls, or switch to port 587 with starttls");
+  }
+  return security;
 }
 
 export function smtpConfigFromEnv(env: VoucherOrderEnv): SmtpConfig {
