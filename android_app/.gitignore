@@ -3,7 +3,10 @@
 /local.properties
 /.idea/
 .DS_Store
-/build
+# Unanchored on purpose: the original "/build" only matched android_app/build,
+# which does not exist — the real output lives in the app module at
+# android_app/app/build, so it was never ignored and got committed instead.
+build/
 /captures
 .externalNativeBuild
 .cxx
