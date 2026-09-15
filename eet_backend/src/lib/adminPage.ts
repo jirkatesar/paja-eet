@@ -213,7 +213,7 @@ const SCRIPT = `
       return [row.reference, row.status, row.amountCzk, row.pok || "—", String(row.attempts), errorText(row), row.createdAt];
     }, "Žádné záznamy.", function (row) {
       return deleteButton(
-        "Smazat záznam o platbě " + row.reference + "?\n\nZ přehledu tím zmizí i doklad o tom, že byla nahlášena finanční správě.",
+        "Smazat záznam o platbě " + row.reference + "?\\n\\nZ přehledu tím zmizí i doklad o tom, že byla nahlášena finanční správě.",
         "/admin/data/delete",
         row,
         loadRows,
@@ -248,7 +248,7 @@ const SCRIPT = `
       ];
     }, "Žádné objednávky.", function (row) {
       return deleteButton(
-        "Smazat objednávku " + row.variableSymbol + " (" + row.amountCzk + " Kč)?\n\n" +
+        "Smazat objednávku " + row.variableSymbol + " (" + row.amountCzk + " Kč)?\\n\\n" +
           (row.status === "PENDING" ? "Číslo poukazu se tím uvolní pro další prodej." : "Objednávka je vyřízená, smaže se jen záznam o ní."),
         "/admin/orders/delete",
         row,

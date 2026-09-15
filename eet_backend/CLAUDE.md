@@ -34,6 +34,27 @@ see "Voucher orders" in Current status and the README.
   for the same id is a 404, no token is a 401, a bad id is a 400, and deleting
   an unfulfilled order really does free its variable symbol for a new one.
 
+### The admin pages are template literals — watch the escapes
+
+`adminPage.ts`, `adminConfigPage.ts` and `adminShared.ts` emit their pages as
+TypeScript **template literals**, and the JavaScript inside them is a plain
+string. A `\n` written into that JS becomes a *real newline* in the emitted
+file, and a JS string literal cannot span lines — the whole `<script>` then
+fails to parse, silently, and the page loads with dead tables. Nothing here
+catches it: `tsc` is happy and the HTML is valid.
+
+It broke the deployed dashboard exactly that way once (2026-09-15): a confirm
+message with `\n\n` killed the script that draws both tables, while the login
+kept working because it lives in the other `<script>`. Use `\\n` in the TS
+source.
+
+To check a page without a browser:
+
+```bash
+curl -s localhost:8788/admin | python3 -c "import sys,re; [open(f'/tmp/s{i}.js','w').write(x) for i,x in enumerate(re.findall(r'<script>(.*?)</script>', sys.stdin.read(), re.S))]"
+for f in /tmp/s*.js; do node --check "$f"; done
+```
+
 ## Deployment is manual
 
 **Do not deploy anything.** The Worker goes out with `npx wrangler deploy` and
