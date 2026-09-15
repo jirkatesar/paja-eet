@@ -494,3 +494,19 @@ export async function pruneUnmatchedPayments(db: D1Database, olderThanDays: numb
     .run();
   return result.meta.changes ?? 0;
 }
+
+/** Removes one registered sale. Returns false when there was nothing to remove. */
+export async function deleteEetSale(db: D1Database, id: number): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM EetSale WHERE id = ?").bind(id).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Removes one order. Worth knowing before pressing it: the variable symbol only
+ * stays taken while the order is live, so deleting an unfulfilled one frees its
+ * number for a future sale — and the record of the sale is gone either way.
+ */
+export async function deletePaymentOrder(db: D1Database, id: number): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM PaymentOrder WHERE id = ?").bind(id).run();
+  return (result.meta.changes ?? 0) > 0;
+}

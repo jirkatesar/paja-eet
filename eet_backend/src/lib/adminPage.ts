@@ -43,7 +43,7 @@ const BODY = `
         <thead>
           <tr>
             <th>Reference</th><th>Stav</th><th>Částka (Kč)</th><th>POK</th>
-            <th>Pokusy</th><th>Chyba</th><th>Vytvořeno</th>
+            <th>Pokusy</th><th>Chyba</th><th>Vytvořeno</th><th></th>
           </tr>
         </thead>
         <tbody id="rowsBody"></tbody>
@@ -77,7 +77,7 @@ const BODY = `
         <thead>
           <tr>
             <th>Druh</th><th>VS</th><th>Stav</th><th>Platba</th><th>Částka (Kč)</th><th>E-mail</th>
-            <th>Vytvořeno</th><th>Zaplaceno</th><th>Odesláno</th><th>Pokusy</th><th>Chyba</th>
+            <th>Vytvořeno</th><th>Zaplaceno</th><th>Odesláno</th><th>Pokusy</th><th>Chyba</th><th></th>
           </tr>
         </thead>
         <tbody id="ordersBody"></tbody>
@@ -145,7 +145,7 @@ const SCRIPT = `
     return authFetch("/fio/status").then(guard).then(function (res) { return res.json(); }).then(renderFioStatus);
   }
 
-  function fillTable(tbody, rows, columnCount, cellsFor, emptyText) {
+  function fillTable(tbody, rows, columnCount, cellsFor, emptyText, actionFor) {
     tbody.textContent = "";
     if (rows.length === 0) {
       var tr = document.createElement("tr");
@@ -163,6 +163,11 @@ const SCRIPT = `
         td.textContent = text;
         tr.appendChild(td);
       });
+      if (actionFor) {
+        var actionCell = document.createElement("td");
+        actionCell.appendChild(actionFor(row));
+        tr.appendChild(actionCell);
+      }
       tbody.appendChild(tr);
     });
   }
@@ -173,10 +178,47 @@ const SCRIPT = `
       : "—";
   }
 
+  /**
+   * A delete button for one row. It asks first, and says what is lost rather
+   * than just "are you sure" — deleting a registered sale removes the only
+   * record of what was filed with the tax authority, and that is worth knowing
+   * before the click rather than after it.
+   */
+  function deleteButton(question, path, row, onDone) {
+    var button = document.createElement("button");
+    button.textContent = "Smazat";
+    button.addEventListener("click", function () {
+      if (!confirm(question)) return;
+      button.disabled = true;
+      authFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: row.id }),
+      })
+        .then(guard)
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          onDone();
+        })
+        .catch(function (err) {
+          button.disabled = false;
+          alert("Nepodařilo se smazat: " + err.message);
+        });
+    });
+    return button;
+  }
+
   function renderRows(rows) {
-    fillTable(rowsBody, rows, 7, function (row) {
+    fillTable(rowsBody, rows, 8, function (row) {
       return [row.reference, row.status, row.amountCzk, row.pok || "—", String(row.attempts), errorText(row), row.createdAt];
-    }, "Žádné záznamy.");
+    }, "Žádné záznamy.", function (row) {
+      return deleteButton(
+        "Smazat záznam o platbě " + row.reference + "?\n\nZ přehledu tím zmizí i doklad o tom, že byla nahlášena finanční správě.",
+        "/admin/data/delete",
+        row,
+        loadRows,
+      );
+    });
   }
 
   function loadRows() {
@@ -190,7 +232,7 @@ const SCRIPT = `
   }
 
   function renderOrders(rows) {
-    fillTable(ordersBody, rows, 11, function (row) {
+    fillTable(ordersBody, rows, 12, function (row) {
       return [
         row.kind === "VOUCHER" ? "poukaz" : "masáž",
         row.variableSymbol,
@@ -204,7 +246,15 @@ const SCRIPT = `
         String(row.attempts),
         row.lastError || "—",
       ];
-    }, "Žádné objednávky.");
+    }, "Žádné objednávky.", function (row) {
+      return deleteButton(
+        "Smazat objednávku " + row.variableSymbol + " (" + row.amountCzk + " Kč)?\n\n" +
+          (row.status === "PENDING" ? "Číslo poukazu se tím uvolní pro další prodej." : "Objednávka je vyřízená, smaže se jen záznam o ní."),
+        "/admin/orders/delete",
+        row,
+        loadOrders,
+      );
+    });
   }
 
   function loadOrders() {

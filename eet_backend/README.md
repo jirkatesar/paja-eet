@@ -509,6 +509,14 @@ look at this page.
 The dashboard shows the Fio poll's own state (with a "check now" button that
 calls `POST /fio/poll`) and a filterable table of `EetSale` rows.
 
+Both tables have a **Smazat** button on every row, which asks first and says
+what is lost: deleting a registered sale removes the only record of what was
+filed with the tax authority, and deleting an unfulfilled order frees its
+variable symbol for another sale. Backed by `POST /admin/data/delete` and
+`POST /admin/orders/delete` (Bearer auth: either credential), each taking
+`{ "id": … }` and answering `404` when there is nothing with that id rather
+than pretending it worked.
+
 **`GET /admin/data`** (Bearer auth: `EET_API_TOKEN` or `ADMIN_PASSWORD`) —
 returns `{ rows: EetSaleRow[] }`, filtered and capped server-side via query
 params so the caller controls exactly how much it pulls:

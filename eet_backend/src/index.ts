@@ -129,6 +129,17 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
+/** The `id` a delete request is for, or null when the body is not usable. */
+async function readId(request: Request): Promise<number | null> {
+  try {
+    const body = (await request.json()) as { id?: unknown };
+    const id = Number(body.id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
@@ -308,6 +319,23 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     const rows = await db.listPaymentOrders(env.DB, { status: statusParam as PaymentOrderStatus | "ALL", limit });
     return json({ rows });
+  }
+
+  // Deleting a record is destructive and irreversible, so it is its own
+  // endpoint rather than something a stray GET could reach, and it answers 404
+  // when the id is gone instead of pretending it worked.
+  if (request.method === "POST" && url.pathname === "/admin/data/delete") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+    const id = await readId(request);
+    if (id === null) return json({ error: "invalid_json" }, 400);
+    return (await db.deleteEetSale(env.DB, id)) ? json({ ok: true }) : json({ error: "not_found" }, 404);
+  }
+
+  if (request.method === "POST" && url.pathname === "/admin/orders/delete") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+    const id = await readId(request);
+    if (id === null) return json({ error: "invalid_json" }, 400);
+    return (await db.deletePaymentOrder(env.DB, id)) ? json({ ok: true }) : json({ error: "not_found" }, 404);
   }
 
   if (request.method === "GET" && url.pathname === "/fio/status") {

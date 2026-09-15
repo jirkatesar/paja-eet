@@ -28,6 +28,12 @@ renders one, and `POST /voucher/order` (migration `0003_voucher_order.sql`)
 takes an order, matches the incoming bank transfer, and e-mails the voucher —
 see "Voucher orders" in Current status and the README.
 
+- **The dashboard can delete records.** `POST /admin/data/delete` and
+  `POST /admin/orders/delete` (added 2026-09-15) each take `{ id }` and answer
+  `404` for an id that is gone. Verified locally: both delete, the second call
+  for the same id is a 404, no token is a 401, a bad id is a 400, and deleting
+  an unfulfilled order really does free its variable symbol for a new one.
+
 ## Deployment is manual
 
 **Do not deploy anything.** The Worker goes out with `npx wrangler deploy` and
