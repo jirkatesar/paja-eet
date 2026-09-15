@@ -130,6 +130,18 @@ class PaymentViewModel(
         resetTransactionState()
     }
 
+    /**
+     * Forgets the result of the last payment — the success or the warning — so
+     * that coming back to the payment screen shows a clean one rather than the
+     * outcome of a sale that is already dealt with.
+     *
+     * Only the *result* goes, not what has been typed: an operator who stepped
+     * over to Nastavení and back has not started a new sale.
+     */
+    fun clearResults() {
+        resetTransactionState()
+    }
+
     private fun resetTransactionState() {
         cashState = CashSubmissionState.Idle
         cashReference = null

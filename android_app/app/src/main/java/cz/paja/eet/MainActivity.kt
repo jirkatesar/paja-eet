@@ -43,6 +43,12 @@ class MainActivity : ComponentActivity() {
                 val pendingCount by paymentViewModel.pending.collectAsState()
 
                 fun goTo(route: String) {
+                    // Arriving on the payment screen from anywhere else starts it
+                    // clean. Tapping "Platba" while already there is not a switch,
+                    // so it leaves the result the operator is reading alone.
+                    if (route == Routes.PAYMENT && navController.currentBackStackEntry?.destination?.route != Routes.PAYMENT) {
+                        paymentViewModel.clearResults()
+                    }
                     navController.navigate(route) {
                         popUpTo(Routes.PAYMENT) { inclusive = route == Routes.PAYMENT }
                         launchSingleTop = true
