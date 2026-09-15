@@ -7,9 +7,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cz.paja.eet.data.EetApiClient
 import cz.paja.eet.data.EetReportResult
-import cz.paja.eet.data.PaymentKind
-import cz.paja.eet.data.PaymentOrderResult
 import cz.paja.eet.data.AppSettings
+import cz.paja.eet.data.PaymentKind
+import cz.paja.eet.data.PendingOperation
+import cz.paja.eet.data.PendingOperationsRepository
+import cz.paja.eet.data.PaymentOrderResult
 import cz.paja.eet.data.PaymentPreset
 import cz.paja.eet.data.SettingsRepository
 import cz.paja.eet.domain.CzechBankQr
@@ -17,13 +19,26 @@ import cz.paja.eet.domain.PaymentReference
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 class PaymentViewModel(
     private val settingsRepository: SettingsRepository,
     private val eetApiClient: EetApiClient,
+    private val pendingRepository: PendingOperationsRepository,
 ) : ViewModel() {
+
+    /** Sales the Worker has not been told about yet, oldest first. */
+    val pending: StateFlow<List<PendingOperation>> = pendingRepository.queueFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    var retrying by mutableStateOf(false)
+        private set
+
+    /** One line about the last retry round, shown next to the button. */
+    var retryResult by mutableStateOf<String?>(null)
+        private set
 
     val settings: StateFlow<AppSettings> = settingsRepository.settingsFlow.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings(),
@@ -80,6 +95,8 @@ class PaymentViewModel(
         val kind: PaymentKind,
         val constantSymbol: String?,
         val cash: Boolean,
+        /** The EET reference for a cash sale, so a failed registration can be queued with it. */
+        val reportReference: String?,
     )
 
     fun onAmountTextChanged(value: String) {
@@ -147,6 +164,9 @@ class PaymentViewModel(
             return
         }
         val reference = cashReference ?: UUID.randomUUID().toString().also { cashReference = it }
+        // Generated once and reused: it identifies this sale in the queue, and a
+        // retry that invented a new one would file a second, unrelated sale.
+        val variableSymbol = variableSymbolFor()
 
         // Anything sold for cash is already paid, so its order goes out `cash =
         // true` and the Worker sends the receipt straight away — a voucher as
@@ -158,11 +178,12 @@ class PaymentViewModel(
             recordOrder(
                 OrderRequest(
                     amountCzk = amount,
-                    variableSymbol = variableSymbolFor(),
+                    variableSymbol = variableSymbol,
                     email = email,
                     kind = kindFor(),
                     constantSymbol = null,
                     cash = true,
+                    reportReference = reference,
                 ),
             )
         }
@@ -172,7 +193,22 @@ class PaymentViewModel(
             cashState = when (val result = eetApiClient.reportSale(current.eetUrl, current.eetToken, reference, amount)) {
                 is EetReportResult.Success -> CashSubmissionState.Success(result.pok)
                 is EetReportResult.Queued -> CashSubmissionState.Queued
-                is EetReportResult.Error -> CashSubmissionState.Error(result.message)
+                is EetReportResult.Error -> {
+                    // The sale is taken but not registered. Queue it so it is not
+                    // lost when the phone cannot reach the Worker.
+                    rememberFailedSale(
+                        PendingOperation(
+                            cash = true,
+                            amountCzk = amount,
+                            variableSymbol = variableSymbol,
+                            email = "",
+                            kind = kindFor(),
+                            constantSymbol = null,
+                            reportReference = reference,
+                        ),
+                    )
+                    CashSubmissionState.Error(result.message)
+                }
             }
         }
     }
@@ -229,6 +265,7 @@ class PaymentViewModel(
                 kind = kindFor(),
                 constantSymbol = qr.constantSymbol,
                 cash = false,
+                reportReference = null,
             ),
         )
         return true
@@ -251,6 +288,7 @@ class PaymentViewModel(
         val current = settings.value
         if (!current.isEetConfigured) {
             orderState = PaymentOrderState.Failed("EET_URL a EET_TOKEN nejsou v Nastavení vyplněné, objednávku nelze zaevidovat.")
+            rememberFailedOrder(request, "EET_URL a EET_TOKEN nejsou v Nastavení vyplněné.")
             return
         }
         viewModelScope.launch {
@@ -267,7 +305,10 @@ class PaymentViewModel(
             )
             orderState = when (result) {
                 PaymentOrderResult.Recorded, PaymentOrderResult.AlreadyExists -> PaymentOrderState.Recorded
-                is PaymentOrderResult.Error -> PaymentOrderState.Failed(result.message)
+                is PaymentOrderResult.Error -> {
+                    rememberFailedOrder(request, result.message)
+                    PaymentOrderState.Failed(result.message)
+                }
             }
         }
     }
@@ -312,6 +353,109 @@ class PaymentViewModel(
         } catch (e: Exception) {
             false
         }
+    }
+
+    // ------------------------------------------------------------- the queue
+
+    /** Remembers a sale the Worker could not be told about, so it can be told later. */
+    private fun rememberFailedSale(operation: PendingOperation) {
+        viewModelScope.launch { pendingRepository.addOrUpdate(operation) }
+    }
+
+    private fun rememberFailedOrder(request: OrderRequest, message: String) {
+        rememberFailedSale(
+            PendingOperation(
+                cash = request.cash,
+                amountCzk = request.amountCzk,
+                variableSymbol = request.variableSymbol,
+                email = request.email,
+                kind = request.kind,
+                constantSymbol = request.constantSymbol,
+                reportReference = request.reportReference,
+                lastError = message,
+            ),
+        )
+    }
+
+    init {
+        // While the app is running, keep trying. Foreground-only on purpose: the
+        // till is either open with somebody looking at it, or it is not, and a
+        // background job would want a permission and a scheduler to do useful
+        // work only while a customer is standing there.
+        viewModelScope.launch {
+            while (true) {
+                val configured = settings.value.retryIntervalMinutes
+                val minutes = if (configured > 0) configured else AppSettings.DEFAULT_RETRY_INTERVAL_MINUTES
+                delay(minutes * 60_000L)
+                if (pending.value.isNotEmpty()) retryPending()
+            }
+        }
+    }
+
+    /** Sends every queued sale again; whatever still fails stays in the queue. */
+    fun retryPending() {
+        if (retrying) return
+        viewModelScope.launch {
+            retrying = true
+            val queued = pending.value
+            val stillFailing = mutableListOf<PendingOperation>()
+            var sent = 0
+            for (item in queued) {
+                val error = send(item)
+                if (error == null) {
+                    sent++
+                } else {
+                    stillFailing += item.copy(attempts = item.attempts + 1, lastError = error)
+                }
+            }
+            pendingRepository.replace(stillFailing)
+            retrying = false
+            retryResult =
+                when {
+                    queued.isEmpty() -> null
+                    stillFailing.isEmpty() -> "Odesláno: $sent"
+                    else -> "Odesláno: $sent, zbývá: ${stillFailing.size}"
+                }
+        }
+    }
+
+    /**
+     * Returns null once everything this sale needed has been sent.
+     *
+     * Both calls are safe to repeat — the Worker dedupes the EET report on its
+     * reference and answers 409 for a variable symbol it already holds — so the
+     * app does not have to remember which half of a sale got through, and a
+     * retry can simply re-send the whole thing.
+     */
+    private suspend fun send(item: PendingOperation): String? {
+        val current = settings.value
+        if (!current.isEetConfigured) return "EET_URL a EET_TOKEN nejsou v Nastavení vyplněné."
+
+        item.reportReference?.let { reference ->
+            when (val result = eetApiClient.reportSale(current.eetUrl, current.eetToken, reference, item.amountCzk)) {
+                is EetReportResult.Success, EetReportResult.Queued -> Unit
+                is EetReportResult.Error -> return result.message
+            }
+        }
+
+        if (item.email.isNotBlank()) {
+            val result = eetApiClient.createOrder(
+                eetUrl = current.eetUrl,
+                eetToken = current.eetToken,
+                amountCzk = item.amountCzk,
+                variableSymbol = item.variableSymbol,
+                email = item.email,
+                kind = item.kind,
+                constantSymbol = item.constantSymbol,
+                cash = item.cash,
+            )
+            when (result) {
+                PaymentOrderResult.Recorded, PaymentOrderResult.AlreadyExists -> Unit
+                is PaymentOrderResult.Error -> return result.message
+            }
+        }
+
+        return null
     }
 
     private companion object {

@@ -2,6 +2,7 @@ package cz.paja.eet.data
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -28,7 +29,13 @@ data class AppSettings(
     val ksServices: String = "",
     val ksVouchers: String = "",
     val presets: List<PaymentPreset> = emptyList(),
+    /** How often the app re-sends failed sales while it is running, in minutes. */
+    val retryIntervalMinutes: Int = DEFAULT_RETRY_INTERVAL_MINUTES,
 ) {
+    companion object {
+        const val DEFAULT_RETRY_INTERVAL_MINUTES = 5
+    }
+
     /** Whether everything needed to take a cash payment (EET report) is filled in. */
     val isEetConfigured: Boolean
         get() = eetUrl.isNotBlank() && eetToken.isNotBlank()
@@ -76,6 +83,7 @@ class SettingsRepository(private val context: Context) {
         val KS_SERVICES = stringPreferencesKey("ks_services")
         val KS_VOUCHERS = stringPreferencesKey("ks_vouchers")
         val PRESETS = stringPreferencesKey("presets")
+        val RETRY_INTERVAL_MINUTES = intPreferencesKey("retry_interval_minutes")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -87,6 +95,7 @@ class SettingsRepository(private val context: Context) {
             ksServices = prefs[Keys.KS_SERVICES] ?: "",
             ksVouchers = prefs[Keys.KS_VOUCHERS] ?: "",
             presets = decodePresets(prefs[Keys.PRESETS] ?: ""),
+            retryIntervalMinutes = prefs[Keys.RETRY_INTERVAL_MINUTES] ?: AppSettings.DEFAULT_RETRY_INTERVAL_MINUTES,
         )
     }
 
@@ -99,6 +108,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.KS_SERVICES] = settings.ksServices.trim()
             prefs[Keys.KS_VOUCHERS] = settings.ksVouchers.trim()
             prefs[Keys.PRESETS] = encodePresets(settings.presets)
+            prefs[Keys.RETRY_INTERVAL_MINUTES] = settings.retryIntervalMinutes
         }
     }
 }

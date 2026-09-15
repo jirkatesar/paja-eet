@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val app = application as PajaEetApplication
-        val factory = AppViewModelFactory(app.settingsRepository, app.eetApiClient)
+        val factory = AppViewModelFactory(app.settingsRepository, app.eetApiClient, app.pendingRepository)
 
         setContent {
             PajaEetTheme {

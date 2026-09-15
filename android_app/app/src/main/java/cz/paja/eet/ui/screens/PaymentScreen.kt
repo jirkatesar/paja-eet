@@ -49,6 +49,7 @@ import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.PaymentMethod
 import cz.paja.eet.ui.PaymentViewModel
 import cz.paja.eet.ui.PaymentOrderCard
+import cz.paja.eet.ui.PendingCard
 import cz.paja.eet.ui.theme.SectionLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -216,6 +217,15 @@ fun PaymentScreen(
                     style = MaterialTheme.typography.titleMedium,
                 )
             }
+
+            // Above the cash result on purpose: a sale that never got through
+            // matters more than the one that just did.
+            PendingCard(
+                pending = viewModel.pending.collectAsState().value,
+                retrying = viewModel.retrying,
+                retryResult = viewModel.retryResult,
+                onRetry = viewModel::retryPending,
+            )
 
             if (viewModel.method == PaymentMethod.CASH) {
                 CashResultCard(cashState, onRetry = viewModel::submitCashPayment, onNewPayment = viewModel::startNewPayment)

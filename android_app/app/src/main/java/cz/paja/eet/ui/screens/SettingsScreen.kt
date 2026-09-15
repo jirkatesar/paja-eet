@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import cz.paja.eet.data.AppSettings
 import cz.paja.eet.ui.theme.SectionLabel
 import cz.paja.eet.data.PaymentPreset
 import cz.paja.eet.ui.SettingsViewModel
@@ -133,6 +134,26 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
                 value = form.ksVouchers,
                 onValueChange = { v -> viewModel.update { it.copy(ksVouchers = v) } },
                 label = { Text("KS pro platby za poukázky") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            HorizontalDivider()
+
+            Text("NEODESLANÉ PLATBY", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(
+                // Empty means "use the default", which is why 0 is rendered as
+                // nothing rather than as a zero the operator would have to clear.
+                value = if (form.retryIntervalMinutes == 0) "" else form.retryIntervalMinutes.toString(),
+                onValueChange = { v ->
+                    val digits = v.filter { it.isDigit() }.take(3)
+                    viewModel.update { it.copy(retryIntervalMinutes = digits.toIntOrNull() ?: 0) }
+                },
+                label = { Text("Zkoušet znovu každých (minut)") },
+                supportingText = {
+                    Text("Prázdné = ${AppSettings.DEFAULT_RETRY_INTERVAL_MINUTES} minuty. Ruční tlačítko funguje vždy.")
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
