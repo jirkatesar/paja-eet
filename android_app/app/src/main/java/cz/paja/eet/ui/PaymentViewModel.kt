@@ -160,6 +160,12 @@ class PaymentViewModel(
     fun amountCzkOrNull(): Int? = amountText.trim().toIntOrNull()?.takeIf { it > 0 }
 
     fun submitCashPayment() {
+        // A new sale: what the previous one reported is about a payment that is
+        // already settled, and leaving it on screen while this one is taken
+        // would read as if it were about this one. Anything that did not get
+        // through is on the Neodeslané screen, not here.
+        resetTransactionState()
+
         val amount = amountCzkOrNull() ?: return
         val current = settings.value
         if (!current.isEetConfigured) {
@@ -255,6 +261,7 @@ class PaymentViewModel(
      * from paying, so this deliberately never blocks on the network.
      */
     fun submitTransfer(): Boolean {
+        resetTransactionState()
         if (!buildTransferQr()) return false
         val qr = transferQr ?: return false
         // No e-mail, no order: there would be nobody to send the receipt to, so
