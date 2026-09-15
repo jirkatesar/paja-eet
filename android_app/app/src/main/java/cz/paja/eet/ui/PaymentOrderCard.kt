@@ -7,14 +7,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
@@ -34,10 +32,7 @@ import androidx.compose.ui.unit.dp
  * paperwork over by hand, never that the sale itself went wrong.
  */
 @Composable
-fun PaymentOrderCard(state: PaymentOrderState, isVoucher: Boolean) {
-    // What is on its way to the customer. A voucher purchase gets both.
-    val sent = if (isVoucher) "Poukaz i účet" else "Účet"
-
+fun PaymentOrderCard(state: PaymentOrderState) {
     when (state) {
         is PaymentOrderState.Idle -> Unit
         is PaymentOrderState.Recording -> Card {
@@ -52,14 +47,10 @@ fun PaymentOrderCard(state: PaymentOrderState, isVoucher: Boolean) {
                 Text("Zaznamenávám objednávku…")
             }
         }
-        is PaymentOrderState.Recorded -> Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Objednávka zaevidována", fontWeight = FontWeight.Bold)
-                Text("$sent se pošle na e-mail zákazníka.")
-            }
-        }
+        // Nothing on success. The operator sees the payment go through and
+        // the customer walks away; a confirmation that everything is fine is
+        // one more thing on a screen used with somebody waiting.
+        is PaymentOrderState.Recorded -> Unit
         is PaymentOrderState.Failed -> UnsentNotice("Platba nebyla odeslána, odešle se později.")
     }
 }
