@@ -28,6 +28,27 @@ renders one, and `POST /voucher/order` (migration `0003_voucher_order.sql`)
 takes an order, matches the incoming bank transfer, and e-mails the voucher —
 see "Voucher orders" in Current status and the README.
 
+## Deployment is manual
+
+**Do not deploy anything.** The Worker goes out with `npx wrangler deploy` and
+the Android app is installed by hand — both by the person who owns this, on
+purpose. They want to see the build output themselves, and nothing should reach
+production as a side effect of some other piece of work.
+
+What is expected instead: make the change, `npx tsc --noEmit`, build the APK and
+run its tests, exercise the Worker against the local stubs, then say what is
+ready and stop there.
+
+Two consequences worth remembering:
+
+- **Migrations are theirs to run too.** `wrangler d1 migrations apply … --remote`
+  touches production data, and several migrations here have to land *before* the
+  code that needs them (`0005` renamed a table, `0006` added one) — say so
+  clearly rather than running it.
+- **Reading production is fine.** `wrangler d1 execute … --remote` for a
+  read-only query is how the state of a real problem gets diagnosed; just do not
+  write, and never export or delete without being asked.
+
 ## Current status
 
 - **Not deployed anywhere yet**, but the D1 database itself now exists —
