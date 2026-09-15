@@ -90,7 +90,6 @@ class MainActivity : ComponentActivity() {
                             TransferQrScreen(
                                 data = qrData,
                                 orderState = paymentViewModel.orderState,
-                                onRetryOrder = { paymentViewModel.retryOrder() },
                                 onBack = { navController.popBackStack() },
                                 onNewPayment = { paymentViewModel.startNewPayment() },
                             )

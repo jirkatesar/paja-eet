@@ -24,7 +24,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -47,6 +46,7 @@ import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.PaymentMethod
 import cz.paja.eet.ui.PaymentViewModel
 import cz.paja.eet.ui.PajaBottomBar
+import cz.paja.eet.ui.UnsentNotice
 import cz.paja.eet.ui.PaymentOrderCard
 import cz.paja.eet.ui.Routes
 import cz.paja.eet.ui.theme.SectionLabel
@@ -215,15 +215,11 @@ fun PaymentScreen(
             }
 
             if (viewModel.method == PaymentMethod.CASH) {
-                CashResultCard(cashState, onRetry = viewModel::submitCashPayment, onNewPayment = viewModel::startNewPayment)
+                CashResultCard(cashState, onNewPayment = viewModel::startNewPayment)
                 // Separate from the EET result on purpose: the sale can be
                 // registered while the voucher e-mail still needs a retry, and
                 // saying so beats implying the whole payment failed.
-                PaymentOrderCard(
-                    viewModel.orderState,
-                    isVoucher = viewModel.category == PaymentCategory.VOUCHERS,
-                    onRetry = viewModel::retryOrder,
-                )
+                PaymentOrderCard(viewModel.orderState, isVoucher = viewModel.category == PaymentCategory.VOUCHERS)
             }
         }
     }
@@ -243,7 +239,7 @@ private fun PresetsRow(presets: List<PaymentPreset>, onSelect: (PaymentPreset) -
 }
 
 @Composable
-private fun CashResultCard(state: CashSubmissionState, onRetry: () -> Unit, onNewPayment: () -> Unit) {
+private fun CashResultCard(state: CashSubmissionState, onNewPayment: () -> Unit) {
     when (state) {
         is CashSubmissionState.Idle -> Unit
         is CashSubmissionState.Loading -> Card {
@@ -271,14 +267,7 @@ private fun CashResultCard(state: CashSubmissionState, onRetry: () -> Unit, onNe
                 Button(onClick = onNewPayment) { Text("Nová platba") }
             }
         }
-        is CashSubmissionState.Error -> Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Evidenci se nepodařilo odeslat", fontWeight = FontWeight.Bold)
-                Text(state.message)
-                Row {
-                    OutlinedButton(onClick = onRetry) { Text("Zkusit znovu") }
-                }
-            }
-        }
+        // Deliberately not `state.message`: see UnsentNotice.
+        is CashSubmissionState.Error -> UnsentNotice("Platba nebyla odeslána, odešle se později.")
     }
 }

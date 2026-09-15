@@ -80,14 +80,6 @@ class PaymentViewModel(
     /** Stable per-transaction id, reused across retries so the EET Worker can dedupe. */
     private var cashReference: String? = null
 
-    /**
-     * What to send the Worker if the order has to be retried. Kept here rather
-     * than read back off the screen, so a retry works the same whether the
-     * voucher was paid by transfer (retried from the QR) or in cash (retried
-     * from the payment screen).
-     */
-    private var lastOrderRequest: OrderRequest? = null
-
     private data class OrderRequest(
         val amountCzk: Int,
         val variableSymbol: String,
@@ -143,7 +135,6 @@ class PaymentViewModel(
         cashReference = null
         transferQr = null
         orderState = PaymentOrderState.Idle
-        lastOrderRequest = null
     }
 
     fun startNewPayment() {
@@ -271,20 +262,10 @@ class PaymentViewModel(
         return true
     }
 
-    /**
-     * Re-runs the last order call, from whichever screen asked for it. Safe to
-     * repeat: the Worker holds the voucher number, so a second call answers
-     * `409`, which counts as recorded rather than as a failure.
-     */
-    fun retryOrder() {
-        lastOrderRequest?.let { recordOrder(it) }
-    }
-
     /** The customer's e-mail, or null when there is nobody to send to — in which case nothing is ordered. */
     private fun voucherEmailOrNull(): String? = customerEmail.trim().takeIf { it.isNotBlank() }
 
     private fun recordOrder(request: OrderRequest) {
-        lastOrderRequest = request
         val current = settings.value
         if (!current.isEetConfigured) {
             orderState = PaymentOrderState.Failed("EET_URL a EET_TOKEN nejsou v Nastavení vyplněné, objednávku nelze zaevidovat.")

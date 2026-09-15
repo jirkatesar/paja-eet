@@ -10,7 +10,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -35,7 +34,7 @@ import androidx.compose.ui.unit.dp
  * paperwork over by hand, never that the sale itself went wrong.
  */
 @Composable
-fun PaymentOrderCard(state: PaymentOrderState, isVoucher: Boolean, onRetry: () -> Unit) {
+fun PaymentOrderCard(state: PaymentOrderState, isVoucher: Boolean) {
     // What is on its way to the customer. A voucher purchase gets both.
     val sent = if (isVoucher) "Poukaz i účet" else "Účet"
 
@@ -61,15 +60,6 @@ fun PaymentOrderCard(state: PaymentOrderState, isVoucher: Boolean, onRetry: () -
                 Text("$sent se pošle na e-mail zákazníka.")
             }
         }
-        is PaymentOrderState.Failed -> Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Objednávku se nepodařilo zaevidovat", fontWeight = FontWeight.Bold)
-                Text(state.message)
-                Text("$sent se automaticky nepošle — zkuste to znovu, nebo zákazníkovi předejte papíry ručně.")
-                OutlinedButton(onClick = onRetry) { Text("Zkusit znovu") }
-            }
-        }
+        is PaymentOrderState.Failed -> UnsentNotice("Platba nebyla odeslána, odešle se později.")
     }
 }
