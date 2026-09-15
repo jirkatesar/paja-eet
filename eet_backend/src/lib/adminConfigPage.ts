@@ -35,6 +35,13 @@ const BODY = `
     </label>
 
     <label class="field">
+      <span class="label">Držet nespárované platby (dny)</span>
+      <input type="number" id="unmatchedPaymentTtlDays" min="1" max="365" step="1" placeholder="30" />
+      <span class="source" id="unmatchedPaymentTtlDaysSource"></span>
+      <span class="source">Platba, ke které ještě není objednávka, se drží takhle dlouho. Fio ji podruhé nedá, takže po téhle lhůtě už ji objednávka nenajde.</span>
+    </label>
+
+    <label class="field">
       <span class="label">Fio API token</span>
       <input type="password" id="fioToken" autocomplete="new-password" placeholder="" />
       <span class="source" id="fioTokenSource"></span>
@@ -109,7 +116,7 @@ const SCRIPT = `
   var authFetch = window.eetAdmin.authFetch;
 
   var fields = [
-    "fioPollIntervalSeconds", "fioToken",
+    "fioPollIntervalSeconds", "unmatchedPaymentTtlDays", "fioToken",
     "smtpHost", "smtpPort", "smtpSecure", "smtpFrom", "smtpFromName", "smtpUser", "smtpPassword",
   ];
 
@@ -137,6 +144,10 @@ const SCRIPT = `
     el("fioPollIntervalSource").className = "source" + (data.fio.pollIntervalSource === "config" ? " from-config" : "");
 
     // Secrets are write-only: an empty box means "keep what is stored".
+    el("unmatchedPaymentTtlDays").value = data.fio.unmatchedTtlDaysSource === "default" ? "" : data.fio.unmatchedTtlDays;
+    el("unmatchedPaymentTtlDaysSource").textContent = describeSource(null, data.fio.unmatchedTtlDaysSource);
+    el("unmatchedPaymentTtlDaysSource").className = "source" + (data.fio.unmatchedTtlDaysSource === "config" ? " from-config" : "");
+
     el("fioToken").value = "";
     el("fioToken").placeholder = data.fio.tokenSet ? "•••••• (uloženo — nech prázdné pro zachování)" : "nenastaveno";
     el("fioTokenSource").textContent = describeSource(null, data.fio.tokenSource);

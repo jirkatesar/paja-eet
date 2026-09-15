@@ -153,6 +153,29 @@ see "Voucher orders" in Current status and the README.
     repo root, not bundled) by removing the three values from the content
     stream while compensating their width with a negative `TJ` kern, so
     nothing around them shifted.
+- **Only payments that settle an order reach EET, and an order is made even
+  without an e-mail** (migration `0006_unmatched_payment.sql`, added
+  2026-09-15). This narrows what the Worker files: the Fio poll used to
+  register *every* CZK credit, and now matches first and registers only what
+  belongs to an order. A credit that matches nothing is kept in
+  `UnmatchedPayment` — not filed — and dropped after
+  `unmatchedPaymentTtlDays` (configurable on the web config page, default 30).
+  - **Why the storage is not optional:** Fio moves its bookmark on every
+    successful poll, so a payment fetched before its order existed is never
+    shown again. `POST /order` therefore looks in `UnmatchedPayment` when it
+    creates a transfer order, and if the money is already there it settles the
+    order, registers the payment under `fio-<idPohyb>` and reports `PAID`.
+  - **An empty e-mail is allowed** on `/order` (it used to be a 400): the order
+    is what the payment is matched against, so it is worth having regardless.
+    Nothing is sent when there is no address. The app no longer skips the call
+    for a blank field.
+  - Verified locally against stubs: a payment with no order was stored and
+    **not** registered; an order created afterwards with an empty e-mail
+    claimed it, was reported `PAID`, and the payment was registered at that
+    moment; the waiting row was removed.
+  - **Not verified:** the Android side (no emulator) and anything on a deployed
+    Worker. Note that the app must be updated for its half — an older build
+    still skips the order when the e-mail is blank.
 - **Orders now cover services too, and every settlement sends a receipt**
   (`src/lib/paymentOrder.ts` renamed from `voucherOrder.ts`, `src/lib/receipt.ts`,
   migration `0005_payment_order.sql`, added 2026-09-14). A massage paid by

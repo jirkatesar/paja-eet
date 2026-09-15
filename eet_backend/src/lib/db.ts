@@ -383,6 +383,7 @@ export type AppConfigRow = {
   fioEnabled: number | null;
   fioPollIntervalSeconds: number | null;
   fioToken: string | null;
+  unmatchedPaymentTtlDays: number | null;
   smtpHost: string | null;
   smtpPort: number | null;
   smtpSecure: string | null;
@@ -418,7 +419,7 @@ export async function resetAppConfig(db: D1Database): Promise<void> {
     .prepare(
       `UPDATE AppConfig SET fioEnabled = NULL, fioPollIntervalSeconds = NULL, fioToken = NULL,
          smtpHost = NULL, smtpPort = NULL, smtpSecure = NULL, smtpFrom = NULL, smtpFromName = NULL,
-         smtpUser = NULL, smtpPassword = NULL, updatedAt = datetime('now')
+         smtpUser = NULL, smtpPassword = NULL, unmatchedPaymentTtlDays = NULL, updatedAt = datetime('now')
        WHERE id = 1`,
     )
     .run();
@@ -438,4 +439,58 @@ export async function noteMatchFailure(db: D1Database, id: number, message: stri
     .prepare(`UPDATE PaymentOrder SET lastError = ?, updatedAt = datetime('now') WHERE id = ? AND status = 'PENDING'`)
     .bind(message.slice(0, 300), id)
     .run();
+}
+
+/**
+ * An incoming bank payment that had no order to match when the poll fetched it.
+ *
+ * Kept because Fio's bookmark has already moved past it: the poll will never be
+ * shown that transaction again, so without this the order created a minute later
+ * could never learn that the money had already arrived.
+ */
+export type UnmatchedPaymentRow = {
+  id: number;
+  fioIdPohyb: string;
+  amountCzk: string;
+  vsNormalized: string;
+  constantSymbol: string;
+  datTrzby: string;
+  createdAt: string;
+};
+
+/** Remembers a payment for a later order. A replayed poll must not store it twice. */
+export async function insertUnmatchedPayment(
+  db: D1Database,
+  payment: { fioIdPohyb: string; amountCzk: string; vsNormalized: string; constantSymbol: string; datTrzby: string },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO UnmatchedPayment (fioIdPohyb, amountCzk, vsNormalized, constantSymbol, datTrzby)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(payment.fioIdPohyb, payment.amountCzk, payment.vsNormalized, payment.constantSymbol, payment.datTrzby)
+    .run();
+}
+
+/** The payment a newly created order should be settled by, if it has already arrived. */
+export async function findWaitingPayment(db: D1Database, vsNormalized: string): Promise<UnmatchedPaymentRow | null> {
+  const row = await db
+    .prepare(`SELECT * FROM UnmatchedPayment WHERE vsNormalized = ? ORDER BY id ASC LIMIT 1`)
+    .bind(vsNormalized)
+    .first<UnmatchedPaymentRow>();
+  return row ?? null;
+}
+
+/** Called once an order has claimed the payment, so it cannot be claimed twice. */
+export async function deleteUnmatchedPayment(db: D1Database, id: number): Promise<void> {
+  await db.prepare("DELETE FROM UnmatchedPayment WHERE id = ?").bind(id).run();
+}
+
+/** Drops payments no order ever claimed. Returns how many went, for the cron to log. */
+export async function pruneUnmatchedPayments(db: D1Database, olderThanDays: number): Promise<number> {
+  const result = await db
+    .prepare(`DELETE FROM UnmatchedPayment WHERE datetime(createdAt) < datetime('now', ?)`)
+    .bind(`-${olderThanDays} days`)
+    .run();
+  return result.meta.changes ?? 0;
 }

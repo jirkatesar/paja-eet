@@ -1,6 +1,6 @@
 import * as db from "./db";
 import type { PaymentKind, PaymentOrderRow } from "./db";
-import { normalizeAmount } from "./reportSale";
+import { normalizeAmount, reportSale, type EetEnv } from "./reportSale";
 import { fillVoucher } from "./voucher";
 import { sendMail, type SmtpConfig } from "./smtp";
 import { resolveSmtp, type SmtpEnvSource } from "./appConfig";
@@ -20,6 +20,13 @@ import { RECEIPT_SUBJECT, receiptBlock } from "./receipt";
  * `kind` decides what is sent: VOUCHER also gets the PDF, SERVICE only the
  * receipt.
  */
+
+/**
+ * An order needs the EET side too, because a payment that already arrived is
+ * registered with EET at the moment its order is created — see
+ * `claimWaitingPayment`.
+ */
+export type OrderEnv = PaymentOrderEnv & EetEnv;
 
 export interface PaymentOrderEnv extends SmtpEnvSource {
   DB: D1Database;
@@ -78,7 +85,7 @@ export type CreateOrderResult = { ok: true; order: PaymentOrderRow } | { ok: fal
  * `kind` defaults to `VOUCHER` so a client that predates services — the version
  * of the Android app already installed — keeps working unchanged.
  */
-export async function createPaymentOrder(env: PaymentOrderEnv, input: CreateOrderInput): Promise<CreateOrderResult> {
+export async function createPaymentOrder(env: OrderEnv, input: CreateOrderInput): Promise<CreateOrderResult> {
   // Shared with /report on purpose: a voucher amount is a CZK revenue amount and
   // is later handed to EET, so it has to satisfy the same bounds and the same
   // two-decimal shape.
@@ -96,8 +103,11 @@ export async function createPaymentOrder(env: PaymentOrderEnv, input: CreateOrde
     typeof input.variableSymbol === "number" || typeof input.variableSymbol === "string" ? String(input.variableSymbol).trim() : "";
   if (!VS_RE.test(variableSymbol)) return { ok: false, status: 400, error: "variableSymbol must be 1 to 10 digits" };
 
+  // Empty is allowed: the order is still worth having — it is what the bank
+  // payment is matched against — there is simply nobody to send anything to,
+  // and the operator hands the paperwork over.
   const email = typeof input.email === "string" ? input.email.trim() : "";
-  if (!EMAIL_RE.test(email)) return { ok: false, status: 400, error: "email must be a valid e-mail address" };
+  if (email !== "" && !EMAIL_RE.test(email)) return { ok: false, status: 400, error: "email must be a valid e-mail address" };
 
   // Every transfer carries a constant symbol, whatever it is for — the QR for a
   // massage uses the services one, a voucher the voucher one. Storing it keeps
@@ -143,6 +153,12 @@ export async function createPaymentOrder(env: PaymentOrderEnv, input: CreateOrde
     return { ok: true, order: (await db.getPaymentOrder(env.DB, order.id)) ?? order };
   }
 
+  if (await claimWaitingPayment(env, order)) {
+    // The money was already in, so the order is settled and the caller is told
+    // that rather than being handed a PENDING for something already done.
+    return { ok: true, order: (await db.getPaymentOrder(env.DB, order.id)) ?? order };
+  }
+
   return { ok: true, order };
 }
 
@@ -183,6 +199,40 @@ function orderMail(order: PaymentOrderRow): { subject: string; text: string } {
       order.kind === "VOUCHER" ? `Dárkový poukaz na masáž č. ${order.variableSymbol}` : RECEIPT_SUBJECT,
     text: body.join("\r\n"),
   };
+}
+
+/**
+ * Settles a brand-new order with a payment that arrived before it existed.
+ *
+ * Fio moves its bookmark on every successful poll, so a payment fetched while
+ * there was no order is never shown again — the poll keeps such payments in
+ * `UnmatchedPayment` for exactly this moment. The constant symbol is compared
+ * the same way the poll compares it, so a payment cannot be pulled onto an
+ * order it does not belong to; and because it was never registered with EET
+ * while it waited, it is registered now, under the same `fio-<idPohyb>`
+ * reference that makes a repeated claim harmless.
+ */
+async function claimWaitingPayment(env: OrderEnv, order: PaymentOrderRow): Promise<boolean> {
+  const waiting = await db.findWaitingPayment(env.DB, order.vsNormalized);
+  if (!waiting) return false;
+
+  if (!amountsEqual(waiting.amountCzk, Number(order.amountCzk))) return false;
+  if (order.constantSymbol && order.constantSymbol !== waiting.constantSymbol) return false;
+
+  await db.markOrderPaid(env.DB, order.id, waiting.fioIdPohyb);
+  await db.deleteUnmatchedPayment(env.DB, waiting.id);
+  console.log(`Order ${order.id} (${order.kind}, VS ${order.variableSymbol}) settled by a payment that was already waiting`);
+
+  try {
+    await reportSale(env, `fio-${waiting.fioIdPohyb}`, waiting.amountCzk, { datTrzby: waiting.datTrzby });
+  } catch (err) {
+    // The order is settled and the payment is accounted for; the registration
+    // has its own retry queue and does not need this call to succeed.
+    console.error(`Order ${order.id}: registering the waiting payment failed:`, err instanceof Error ? err.message : String(err));
+  }
+
+  await fulfilOrder(env, order);
+  return true;
 }
 
 /**

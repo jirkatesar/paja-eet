@@ -1,6 +1,7 @@
 import * as db from "./db";
 import { normalizeAmount, reportSale, type EetEnv } from "./reportSale";
-import { matchAndFulfil, type PaymentOrderEnv } from "./paymentOrder";
+import { nowIso } from "./xmlsign";
+import { matchAndFulfil, normalizeSymbol, type PaymentOrderEnv } from "./paymentOrder";
 import { resolveFio, DEFAULT_FIO_API_BASE, type FioEnvSource } from "./appConfig";
 
 /** `FIO_TOKEN`, `FIO_POLL_INTERVAL_SECONDS` and `FIO_API_BASE` come in via `FioEnvSource`. */
@@ -128,6 +129,11 @@ export async function runFioPollIfDue(
   try {
     const fetchTransactions = opts.fetchTransactions ?? ((token: string) => fetchNewFioTransactions(token, apiBase));
     const transactions = await fetchTransactions(fio.token!);
+    // One line per run, including the empty ones. Without it a poll that finds
+    // nothing looks exactly like a poll that never happened — which is the
+    // question being asked whenever a payment does not turn up, and it cannot
+    // be answered from the outside.
+    console.log(`Fio poll: fetched ${transactions.length} new transaction(s)`);
     let reportedCount = 0;
     let matchedCount = 0;
 
@@ -150,6 +156,12 @@ export async function runFioPollIfDue(
         continue;
       }
 
+      const amountCzk = normalizeAmount(txn.amountCzk);
+      if (amountCzk === null) {
+        console.error(`Fio poll: transaction ${txn.idPohyb} has an out-of-range amount (${txn.amountCzk}), skipping`);
+        continue;
+      }
+
       // Each transaction is handled independently — one unexpected failure here must not
       // abort the rest of the batch, since Fio's own "new since last call" bookmark has
       // already moved past every transaction in `transactions` by this point: anything not
@@ -160,33 +172,37 @@ export async function runFioPollIfDue(
       // the customer already paid for (and vice versa).
       try {
         const outcome = await matchAndFulfil(env, txn);
-        if (outcome === "matched") matchedCount++;
-      } catch (err) {
-        console.error(
-          `Fio poll: voucher order matching failed for transaction ${txn.idPohyb}:`,
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+        if (outcome === "matched") {
+          matchedCount++;
 
-      const amountCzk = normalizeAmount(txn.amountCzk);
-      if (amountCzk === null) {
-        console.error(`Fio poll: transaction ${txn.idPohyb} has an out-of-range amount (${txn.amountCzk}), skipping`);
-        continue;
-      }
+          // Only a payment that belongs to an order is registered with EET.
+          // Revenue nobody can account for is left for a human to look at
+          // rather than filed automatically.
+          const result = await reportSale(env, `fio-${txn.idPohyb}`, amountCzk, { datTrzby: txn.dateIso ?? undefined });
+          if (result.status === "sent") reportedCount++;
 
-      const reference = `fio-${txn.idPohyb}`;
-      try {
-        const result = await reportSale(env, reference, amountCzk, { datTrzby: txn.dateIso ?? undefined });
-        if (result.status === "sent") reportedCount++;
-
-        // One line per credit, in Fio's own terms — observability is enabled for this
-        // Worker, and this is the only place the payer details are ever available (EET
-        // has nowhere to put them, and only the reference is kept in D1).
-        console.log(
-          `Fio poll: ${reference} ${amountCzk} CZK from ${txn.senderName ?? "unknown"}` +
-            `${txn.variableSymbol ? ` (VS ${txn.variableSymbol})` : ""}` +
-            `${txn.message ? ` "${txn.message}"` : ""} → ${result.status}`,
-        );
+          // One line per credit, in Fio's own terms — observability is enabled for this
+          // Worker, and this is the only place the payer details are ever available (EET
+          // has nowhere to put them, and only the reference is kept in D1).
+          console.log(
+            `Fio poll: fio-${txn.idPohyb} ${amountCzk} CZK from ${txn.senderName ?? "unknown"}` +
+              `${txn.variableSymbol ? ` (VS ${txn.variableSymbol})` : ""}` +
+              `${txn.message ? ` "${txn.message}"` : ""} → ${result.status}`,
+          );
+        } else if (outcome === "no_order" && txn.variableSymbol?.trim()) {
+          // No order *yet* — the customer paid before the order was finished, or
+          // before it was made at all. Fio's bookmark moves past this transaction
+          // on this very call, so this is the last chance to remember it: the
+          // order that may still arrive will look for it here.
+          await db.insertUnmatchedPayment(env.DB, {
+            fioIdPohyb: txn.idPohyb,
+            amountCzk,
+            vsNormalized: normalizeSymbol(txn.variableSymbol),
+            constantSymbol: normalizeSymbol(txn.constantSymbol ?? ""),
+            datTrzby: txn.dateIso ?? nowIso(),
+          });
+          console.log(`Fio poll: ${`fio-${txn.idPohyb}`} ${amountCzk} CZK has no order yet — kept for one`);
+        }
       } catch (err) {
         console.error(`Fio poll: failed to report transaction ${txn.idPohyb}:`, err instanceof Error ? err.message : String(err));
       }

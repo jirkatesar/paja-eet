@@ -235,8 +235,16 @@ constant symbol all match the payment — that is what triggers the voucher PDF
 and its e-mail. See "Voucher orders and delivery" above. An order match does not
 change the EET side: the credit is still registered as revenue.
 
-Every incoming CZK credit is revenue and gets reported as-is, whether or not it
-settles an order. If this Worker is ever wired up behind an app that *also*
+**Only a payment that settles an order is registered with EET.** Every credit
+is matched against an order first; the ones that match are registered and the
+customer is sent their receipt. A credit that matches nothing is **not** filed
+— it is kept in `UnmatchedPayment` for an order that may still be made, and
+dropped after `unmatchedPaymentTtlDays` (default 30) if none ever is.
+
+That is a deliberate narrowing from what this Worker used to do, when every
+credit in koruna was revenue and was registered as-is. Money nobody can account
+for — a mistyped variable symbol, a customer paying without a QR code, bank
+interest — now waits for a human instead of being filed automatically. If this Worker is ever wired up behind an app that *also*
 calls `POST /report` itself for the same bank transfer (e.g. on order
 confirmation), make sure only one side reports each transaction — reporting the
 same money twice under two different references would double-count it with EET.
@@ -334,10 +342,18 @@ can't both win. `409 variable_symbol_already_used` otherwise.
 **`kind` decides what is sent** once the money is in: `VOUCHER` sends the receipt
 *and* the voucher PDF, `SERVICE` sends only the receipt.
 
-**No e-mail, nothing sent.** The app only records an order when an address was
-given; with the field left blank no order is made at all, so no receipt and no
-voucher go out and the operator hands the paperwork over themselves. The Worker
-still requires an address on any order it is given.
+**An order is made even with no e-mail.** The order is what the incoming
+payment is matched against, so it is recorded either way; with the field left
+blank there is simply nothing to send and the operator hands the paperwork
+over. Only an address that was given has to be a valid one.
+
+**A payment that arrived before its order is still settled.** Fio moves its
+bookmark on every successful poll, so a payment fetched while there was no
+order would otherwise never be seen again. The poll keeps such payments, and
+the order claims one when it is created — matching on the symbol, the amount
+and the constant symbol exactly as the poll does. Because the payment was never
+registered while it waited, it is registered at that moment, under the same
+`fio-<idPohyb>` reference, and the reply reports the order as `PAID`.
 
 **What happens next depends on `cash`:**
 
@@ -451,7 +467,7 @@ What can be set:
 
 | | |
 |---|---|
-| **Fio poll** | on/off, check interval (minimum 30s — Fio's own limit), API token |
+| **Fio poll** | on/off, check interval (minimum 30s — Fio's own limit), how long to keep unmatched payments, API token |
 | **SMTP** | host, port, security, sender address and name, user, password |
 
 Two things worth knowing:

@@ -18,6 +18,8 @@ export interface FioEnvSource {
   FIO_TOKEN?: string;
   FIO_POLL_INTERVAL_SECONDS?: string;
   FIO_API_BASE?: string;
+  /** Days an unmatched bank payment is kept for a later order. */
+  FIO_UNMATCHED_TTL_DAYS?: string;
 }
 
 export interface SmtpEnvSource {
@@ -46,6 +48,15 @@ export const MIN_POLL_INTERVAL_SECONDS = 30;
 export const DEFAULT_POLL_INTERVAL_SECONDS = 45;
 export const DEFAULT_SMTP_PORT = 465;
 export const DEFAULT_FIO_API_BASE = "https://fioapi.fio.cz/v1/rest";
+
+/**
+ * How long a bank payment waits for an order that has not been made yet.
+ *
+ * Long enough that an order finished the next day still finds its payment, and
+ * short enough that the table does not keep growing with money nobody ever
+ * accounted for. Matches how long an unpaid order holds its symbol.
+ */
+export const DEFAULT_UNMATCHED_TTL_DAYS = 30;
 
 /** Where an effective value came from — shown on the config page, so the operator can see what they are overriding. */
 export type ValueSource = "config" | "env" | "default" | "unset";
@@ -85,7 +96,8 @@ export type ResolvedFio = {
   token: string | null;
   intervalSeconds: number;
   apiBase: string;
-  sources: { enabled: ValueSource; token: ValueSource; intervalSeconds: ValueSource; apiBase: ValueSource };
+  unmatchedTtlDays: number;
+  sources: { enabled: ValueSource; token: ValueSource; intervalSeconds: ValueSource; apiBase: ValueSource; unmatchedTtlDays: ValueSource };
 };
 
 /**
@@ -102,6 +114,7 @@ export function resolveFio(env: FioEnvSource, row: AppConfigRow): ResolvedFio {
   const token = pickOptional(row.fioToken, env.FIO_TOKEN);
   const interval = pickNumber(row.fioPollIntervalSeconds, env.FIO_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS);
   const apiBase = pickOptional(null, env.FIO_API_BASE);
+  const unmatchedTtl = pickNumber(row.unmatchedPaymentTtlDays, env.FIO_UNMATCHED_TTL_DAYS, DEFAULT_UNMATCHED_TTL_DAYS);
 
   const explicitSwitch = row.fioEnabled === null || row.fioEnabled === undefined ? null : row.fioEnabled !== 0;
   const enabled = (explicitSwitch ?? token.value !== null) && token.value !== null;
@@ -111,11 +124,13 @@ export function resolveFio(env: FioEnvSource, row: AppConfigRow): ResolvedFio {
     token: token.value,
     intervalSeconds: Math.max(MIN_POLL_INTERVAL_SECONDS, interval.value),
     apiBase: apiBase.value ?? DEFAULT_FIO_API_BASE,
+    unmatchedTtlDays: Math.max(1, unmatchedTtl.value),
     sources: {
       enabled: explicitSwitch === null ? "default" : "config",
       token: token.source,
       intervalSeconds: interval.source,
       apiBase: apiBase.source,
+      unmatchedTtlDays: unmatchedTtl.source,
     },
   };
 }
@@ -223,6 +238,8 @@ export function describeConfig(env: FioEnvSource & SmtpEnvSource, row: AppConfig
       pollIntervalSource: fio.sources.intervalSeconds,
       apiBase: fio.apiBase,
       apiBaseSource: fio.sources.apiBase,
+      unmatchedTtlDays: fio.unmatchedTtlDays,
+      unmatchedTtlDaysSource: fio.sources.unmatchedTtlDays,
       tokenSet: fio.token !== null,
       tokenSource: fio.sources.token,
     },
@@ -295,6 +312,17 @@ export function buildConfigPatch(
 
   const token = text(input.fioToken);
   if (token !== "") patch.fioToken = token;
+
+  const ttl = text(input.unmatchedPaymentTtlDays);
+  if (ttl === "") {
+    patch.unmatchedPaymentTtlDays = null;
+  } else {
+    const parsed = Number(ttl);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 365) {
+      return { ok: false, error: "unmatchedPaymentTtlDays must be a whole number of days between 1 and 365" };
+    }
+    patch.unmatchedPaymentTtlDays = parsed;
+  }
 
   // --- SMTP
   for (const field of ["smtpHost", "smtpFrom", "smtpFromName"] as const) {

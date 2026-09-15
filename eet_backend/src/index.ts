@@ -101,6 +101,12 @@ export default {
     try {
       const released = await db.expireOrders(env.DB, orderTtlDays(env));
       if (released > 0) console.log(`Orders: expired ${released} unpaid order(s), their symbols are free again`);
+
+      // Payments no order ever claimed. They are only useful while an order might
+      // still be made for them, and keeping them forever would grow the table
+      // with money nobody accounted for.
+      const dropped = await db.pruneUnmatchedPayments(env.DB, resolveFio(env, await db.getAppConfig(env.DB)).unmatchedTtlDays);
+      if (dropped > 0) console.log(`Fio poll: dropped ${dropped} payment(s) no order ever claimed`);
     } catch (err) {
       console.error("Order expiry failed:", err instanceof Error ? err.message : String(err));
     }

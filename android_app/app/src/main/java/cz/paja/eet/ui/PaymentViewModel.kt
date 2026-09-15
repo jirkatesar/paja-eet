@@ -275,14 +275,15 @@ class PaymentViewModel(
         resetTransactionState()
         if (!buildTransferQr()) return false
         val qr = transferQr ?: return false
-        // No e-mail, no order: there would be nobody to send the receipt to, so
-        // nothing is recorded and staff hand the voucher over themselves.
-        val email = qr.customerEmail.takeIf { it.isNotBlank() } ?: return true
+        // Recorded even with no address. The order is what the incoming bank
+        // payment is matched against — money that arrives without one would be
+        // left unaccounted for and never registered with EET. With no address
+        // there is simply nothing to send, and staff hand the paperwork over.
         recordOrder(
             OrderRequest(
                 amountCzk = qr.amountCzk,
                 variableSymbol = qr.variableSymbol,
-                email = email,
+                email = qr.customerEmail,
                 kind = kindFor(),
                 constantSymbol = qr.constantSymbol,
                 cash = false,
