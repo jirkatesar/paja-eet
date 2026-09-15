@@ -40,8 +40,19 @@ class PaymentViewModel(
     var retryResult by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Always live, not `WhileSubscribed`: this is the only place the payment
+     * screen and the retry loop read the configuration from, and a change saved
+     * while the operator was on another screen has to be in effect the moment
+     * they come back. Collecting only while something is watching left the value
+     * as it was before the edit.
+     *
+     * The starting value is the defaults, which is wrong for the fraction of a
+     * second before the store answers — that is why nothing may act on it until
+     * the screen exists to show it.
+     */
     val settings: StateFlow<AppSettings> = settingsRepository.settingsFlow.stateIn(
-        viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings(),
+        viewModelScope, SharingStarted.Eagerly, AppSettings(),
     )
 
     var amountText by mutableStateOf("")
