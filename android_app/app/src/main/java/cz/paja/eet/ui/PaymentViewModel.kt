@@ -398,23 +398,25 @@ class PaymentViewModel(
         viewModelScope.launch {
             retrying = true
             val queued = pending.value
+            val sentIds = mutableSetOf<String>()
             val stillFailing = mutableListOf<PendingOperation>()
-            var sent = 0
             for (item in queued) {
                 val error = send(item)
                 if (error == null) {
-                    sent++
+                    sentIds += item.id
                 } else {
                     stillFailing += item.copy(attempts = item.attempts + 1, lastError = error)
                 }
             }
-            pendingRepository.replace(stillFailing)
+            // Removes only what actually went through, against whatever is in the
+            // queue right now — not against the list read before the network calls.
+            pendingRepository.applyRetryResult(sentIds, stillFailing)
             retrying = false
             retryResult =
                 when {
                     queued.isEmpty() -> null
-                    stillFailing.isEmpty() -> "Odesláno: $sent"
-                    else -> "Odesláno: $sent, zbývá: ${stillFailing.size}"
+                    stillFailing.isEmpty() -> "Odesláno: ${sentIds.size}"
+                    else -> "Odesláno: ${sentIds.size}, zbývá: ${stillFailing.size}"
                 }
         }
     }

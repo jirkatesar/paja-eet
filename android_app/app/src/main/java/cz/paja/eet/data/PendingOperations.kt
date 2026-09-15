@@ -67,9 +67,17 @@ private fun decodeQueue(raw: String): List<PendingOperation> {
     if (raw.isBlank()) return emptyList()
     return runCatching {
         val array = JSONArray(raw)
-        (0 until array.length()).map { i ->
-            val obj = array.getJSONObject(i)
-            PendingOperation(
+        (0 until array.length()).mapNotNull { i ->
+            // Per item, not per list: one unreadable entry must not take the
+            // whole queue with it — the entries are unpaid sales, and losing
+            // them silently is the one thing this file exists to prevent.
+            runCatching { decodeItem(array.getJSONObject(i)) }.getOrNull()
+        }
+    }.getOrDefault(emptyList())
+}
+
+private fun decodeItem(obj: JSONObject): PendingOperation =
+    PendingOperation(
                 id = obj.optString("id").ifEmpty { UUID.randomUUID().toString() },
                 createdAt = obj.optLong("createdAt"),
                 attempts = obj.optInt("attempts"),
@@ -82,11 +90,8 @@ private fun decodeQueue(raw: String): List<PendingOperation> {
                 // promising a voucher that will never be sent.
                 kind = runCatching { PaymentKind.valueOf(obj.optString("kind")) }.getOrDefault(PaymentKind.SERVICE),
                 constantSymbol = if (obj.isNull("constantSymbol")) null else obj.optString("constantSymbol"),
-                reportReference = if (obj.isNull("reportReference")) null else obj.optString("reportReference"),
-            )
-        }
-    }.getOrDefault(emptyList())
-}
+        reportReference = if (obj.isNull("reportReference")) null else obj.optString("reportReference"),
+    )
 
 /**
  * The queue, on disk so it survives the app being closed — which is the point:
@@ -138,7 +143,21 @@ class PendingOperationsRepository(private val context: Context) {
         }
     }
 
-    suspend fun replace(items: List<PendingOperation>) {
-        context.queueStore.edit { prefs -> prefs[Keys.QUEUE] = encodeQueue(items) }
+    /**
+     * Removes the sales that went through and refreshes the ones that did not.
+     *
+     * Deliberately reads the queue *inside* the edit rather than taking the
+     * caller's snapshot: a retry round spends seconds on the network, and a sale
+     * that fails during it is added by another coroutine. Writing back a
+     * snapshot would erase exactly those — the payments made while the phone was
+     * already struggling, which are the ones most likely to need the queue.
+     */
+    suspend fun applyRetryResult(sentIds: Set<String>, stillFailing: List<PendingOperation>) {
+        context.queueStore.edit { prefs ->
+            val current = decodeQueue(prefs[Keys.QUEUE] ?: "")
+            val byId = stillFailing.associateBy { it.id }
+            val next = current.filterNot { it.id in sentIds }.map { byId[it.id] ?: it }
+            prefs[Keys.QUEUE] = encodeQueue(next)
+        }
     }
 }
