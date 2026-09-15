@@ -326,7 +326,14 @@ class PaymentViewModel(
         if (isVoucher && customerEmailInvalid()) return false
 
         val ks = if (isVoucher) current.ksVouchers else current.ksServices
-        val message = if (isVoucher) listOf("POUKAZKA", note).filter { it.isNotBlank() }.joinToString(" ") else note
+        // The recipient's message says what the payment is for, so the bank
+        // statement of whoever receives it is not just an amount. A voucher
+        // already said so; a massage did not.
+        val message =
+            (if (isVoucher) listOf("POUKAZKA") else listOf("Masáže"))
+                .plus(note)
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
         // Every payment carries a variable symbol now, not just a voucher: it is
         // how the Worker tells whose transfer arrived and who gets the receipt.
         val variableSymbol = variableSymbolFor()
