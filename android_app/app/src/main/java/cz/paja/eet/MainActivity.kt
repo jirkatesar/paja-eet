@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -13,14 +15,14 @@ import androidx.navigation.compose.rememberNavController
 import cz.paja.eet.ui.AppViewModelFactory
 import cz.paja.eet.ui.PaymentViewModel
 import cz.paja.eet.ui.SettingsViewModel
+import cz.paja.eet.ui.Routes
 import cz.paja.eet.ui.screens.PaymentScreen
+import cz.paja.eet.ui.screens.PendingScreen
 import cz.paja.eet.ui.screens.SettingsScreen
 import cz.paja.eet.ui.screens.TransferQrScreen
 import cz.paja.eet.ui.theme.PajaEetTheme
 
-private const val ROUTE_PAYMENT = "payment"
-private const val ROUTE_SETTINGS = "settings"
-private const val ROUTE_TRANSFER_QR = "transfer_qr"
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,19 +37,45 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val paymentViewModel: PaymentViewModel = viewModel(factory = factory)
 
-                NavHost(navController = navController, startDestination = ROUTE_PAYMENT) {
-                    composable(ROUTE_PAYMENT) {
+                // The menu switches between the three destinations; the QR code
+                // is a step in the middle of the payment flow, not one of them,
+                // so it stays out of the bar and keeps its back arrow.
+                val pendingCount by paymentViewModel.pending.collectAsState()
+
+                fun goTo(route: String) {
+                    navController.navigate(route) {
+                        popUpTo(Routes.PAYMENT) { inclusive = route == Routes.PAYMENT }
+                        launchSingleTop = true
+                    }
+                }
+
+                NavHost(navController = navController, startDestination = Routes.PAYMENT) {
+                    composable(Routes.PAYMENT) {
                         PaymentScreen(
                             viewModel = paymentViewModel,
-                            onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
-                            onShowTransferQr = { navController.navigate(ROUTE_TRANSFER_QR) },
+                            pendingCount = pendingCount.size,
+                            onNavigate = ::goTo,
+                            onShowTransferQr = { navController.navigate(Routes.TRANSFER_QR) },
                         )
                     }
-                    composable(ROUTE_SETTINGS) {
-                        val settingsViewModel: SettingsViewModel = viewModel(factory = factory)
-                        SettingsScreen(viewModel = settingsViewModel, onBack = { navController.popBackStack() })
+                    composable(Routes.PENDING) {
+                        PendingScreen(
+                            pending = pendingCount,
+                            retrying = paymentViewModel.retrying,
+                            retryResult = paymentViewModel.retryResult,
+                            onRetry = paymentViewModel::retryPending,
+                            onNavigate = ::goTo,
+                        )
                     }
-                    composable(ROUTE_TRANSFER_QR) {
+                    composable(Routes.SETTINGS) {
+                        val settingsViewModel: SettingsViewModel = viewModel(factory = factory)
+                        SettingsScreen(
+                            viewModel = settingsViewModel,
+                            pendingCount = pendingCount.size,
+                            onNavigate = ::goTo,
+                        )
+                    }
+                    composable(Routes.TRANSFER_QR) {
                         // Captured once on entry: the "Zavřít" button clears transferQr on the
                         // ViewModel as part of leaving this screen, and re-reading it reactively
                         // here would flip this route to blank mid-navigation.

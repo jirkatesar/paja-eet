@@ -15,7 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Spa
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -24,7 +23,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,15 +46,17 @@ import cz.paja.eet.ui.CashSubmissionState
 import cz.paja.eet.ui.PaymentCategory
 import cz.paja.eet.ui.PaymentMethod
 import cz.paja.eet.ui.PaymentViewModel
+import cz.paja.eet.ui.PajaBottomBar
 import cz.paja.eet.ui.PaymentOrderCard
-import cz.paja.eet.ui.PendingCard
+import cz.paja.eet.ui.Routes
 import cz.paja.eet.ui.theme.SectionLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PaymentScreen(
     viewModel: PaymentViewModel,
-    onOpenSettings: () -> Unit,
+    pendingCount: Int,
+    onNavigate: (String) -> Unit,
     onShowTransferQr: () -> Unit,
 ) {
     val settings by viewModel.settings.collectAsState()
@@ -75,13 +75,9 @@ fun PaymentScreen(
                         Text("Masáže")
                     }
                 },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Nastavení")
-                    }
-                },
             )
         },
+        bottomBar = { PajaBottomBar(Routes.PAYMENT, pendingCount, onNavigate) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -97,7 +93,7 @@ fun PaymentScreen(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Aplikace není plně nastavena.", fontWeight = FontWeight.Bold)
                         Text("Doplňte prosím EET a platební údaje v Nastavení, než začnete evidovat platby.")
-                        TextButton(onClick = onOpenSettings) { Text("Přejít do Nastavení") }
+                        TextButton(onClick = { onNavigate(Routes.SETTINGS) }) { Text("Přejít do Nastavení") }
                     }
                 }
             }
@@ -217,15 +213,6 @@ fun PaymentScreen(
                     style = MaterialTheme.typography.titleMedium,
                 )
             }
-
-            // Above the cash result on purpose: a sale that never got through
-            // matters more than the one that just did.
-            PendingCard(
-                pending = viewModel.pending.collectAsState().value,
-                retrying = viewModel.retrying,
-                retryResult = viewModel.retryResult,
-                onRetry = viewModel::retryPending,
-            )
 
             if (viewModel.method == PaymentMethod.CASH) {
                 CashResultCard(cashState, onRetry = viewModel::submitCashPayment, onNewPayment = viewModel::startNewPayment)

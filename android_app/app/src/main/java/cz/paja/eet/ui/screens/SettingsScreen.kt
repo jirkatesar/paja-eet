@@ -11,7 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
@@ -43,11 +42,13 @@ import androidx.compose.ui.unit.dp
 import cz.paja.eet.data.AppSettings
 import cz.paja.eet.ui.theme.SectionLabel
 import cz.paja.eet.data.PaymentPreset
+import cz.paja.eet.ui.PajaBottomBar
+import cz.paja.eet.ui.Routes
 import cz.paja.eet.ui.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
+fun SettingsScreen(viewModel: SettingsViewModel, pendingCount: Int, onNavigate: (String) -> Unit) {
     val snackbarHostState = remember { SnackbarHostState() }
     val form = viewModel.form
 
@@ -57,15 +58,11 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Nastavení") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zpět")
-                    }
-                },
-            )
+            // No back arrow: the menu is how you leave this screen now, and a
+            // second way out of a destination is just something else to decide.
+            TopAppBar(title = { Text("Nastavení") })
         },
+        bottomBar = { PajaBottomBar(Routes.SETTINGS, pendingCount, onNavigate) },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
@@ -170,7 +167,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
             )
 
             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = { viewModel.save(); onBack() }) { Text("Uložit") }
+                TextButton(onClick = { viewModel.save(); onNavigate(Routes.PAYMENT) }) { Text("Uložit") }
             }
         }
     }
