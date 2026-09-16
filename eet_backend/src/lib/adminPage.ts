@@ -66,12 +66,36 @@ const BODY = `
       </label>
       <label>Limit <input type="number" id="orderLimit" value="50" min="1" max="500" /></label>
       <button id="ordersRefreshBtn">Obnovit</button>
+      <button id="orderNewBtn" type="button">Nová objednávka</button>
+      <span id="ordersMsg" class="ok"></span>
     </div>
     <p class="hint">
       <b>Poukaz</b> pošle poukaz i účet, <b>masáž</b> jen účet. <code>PENDING</code>
       čeká na platbu, <code>PAID</code> je zaplaceno a zpráva se doposílá,
       <code>SENT</code> doručeno.
     </p>
+    <form id="orderForm" class="hidden">
+      <h3 id="orderFormTitle">Nová objednávka</h3>
+      <div class="filters">
+        <label>Částka (Kč) <input type="number" id="orderAmount" min="1" step="1" /></label>
+        <label>Variabilní symbol <input type="text" id="orderVs" inputmode="numeric" /></label>
+        <label>Druh
+          <select id="orderKind">
+            <option value="VOUCHER">poukaz</option>
+            <option value="SERVICE">masáž</option>
+          </select>
+        </label>
+        <label>E-mail <input type="text" id="orderEmail" /></label>
+        <label>KS <input type="text" id="orderKs" inputmode="numeric" /></label>
+        <label class="checkline"><input type="checkbox" id="orderCash" /> hotovost</label>
+      </div>
+      <div class="filters">
+        <button type="submit" id="orderSaveBtn">Uložit</button>
+        <button type="button" id="orderCancelBtn">Zrušit</button>
+        <span id="orderFormMsg"></span>
+      </div>
+      <p class="hint" id="orderFormHint"></p>
+    </form>
     <div id="ordersTableWrap">
       <table>
         <thead>
@@ -104,6 +128,30 @@ const SCRIPT = `
   var orderStatusFilter = document.getElementById("orderStatusFilter");
   var orderLimitInput = document.getElementById("orderLimit");
   var ordersRefreshBtn = document.getElementById("ordersRefreshBtn");
+  var ordersMsg = document.getElementById("ordersMsg");
+  var orderForm = document.getElementById("orderForm");
+  var orderFormTitle = document.getElementById("orderFormTitle");
+  var orderFormHint = document.getElementById("orderFormHint");
+  var orderFormMsg = document.getElementById("orderFormMsg");
+  var orderAmount = document.getElementById("orderAmount");
+  var orderVs = document.getElementById("orderVs");
+  var orderKind = document.getElementById("orderKind");
+  var orderEmail = document.getElementById("orderEmail");
+  var orderKs = document.getElementById("orderKs");
+  var orderCash = document.getElementById("orderCash");
+  var orderSaveBtn = document.getElementById("orderSaveBtn");
+  var orderNewBtn = document.getElementById("orderNewBtn");
+  var orderCancelBtn = document.getElementById("orderCancelBtn");
+
+  /** The order the form is editing, or null when it is making a new one. */
+  var editingOrderId = null;
+  /**
+   * Whether that order has already been settled. Held here rather than read off
+   * the form: a settled order's fields are disabled but still *hold* their
+   * values, and sending them would have the Worker refuse the whole edit — the
+   * e-mail included — with "objednávka je vyřízená".
+   */
+  var editingSettled = false;
 
   function guard(res) {
     if (res.status === 401) { showLogin("Heslo přestalo platit, přihlas se znovu."); throw new Error("unauthorized"); }
@@ -247,13 +295,24 @@ const SCRIPT = `
         row.lastError || "—",
       ];
     }, "Žádné objednávky.", function (row) {
-      return deleteButton(
-        "Smazat objednávku " + row.variableSymbol + " (" + row.amountCzk + " Kč)?\\n\\n" +
-          (row.status === "PENDING" ? "Číslo poukazu se tím uvolní pro další prodej." : "Objednávka je vyřízená, smaže se jen záznam o ní."),
-        "/admin/orders/delete",
-        row,
-        loadOrders,
+      var cell = document.createElement("div");
+      cell.className = "rowactions";
+
+      var editBtn = document.createElement("button");
+      editBtn.textContent = "Upravit";
+      editBtn.addEventListener("click", function () { openOrderForm(row); });
+      cell.appendChild(editBtn);
+
+      cell.appendChild(
+        deleteButton(
+          "Smazat objednávku " + row.variableSymbol + " (" + row.amountCzk + " Kč)?\\n\\n" +
+            (row.status === "PENDING" ? "Číslo poukazu se tím uvolní pro další prodej." : "Objednávka je vyřízená, smaže se jen záznam o ní."),
+          "/admin/orders/delete",
+          row,
+          loadOrders,
+        ),
       );
+      return cell;
     });
   }
 
@@ -264,6 +323,127 @@ const SCRIPT = `
     return authFetch("/admin/orders?" + params.toString()).then(guard).then(function (res) { return res.json(); })
       .then(function (data) { renderOrders(data.rows || []); });
   }
+
+  /** The Worker's error codes, said the way somebody at a desk would say them. */
+  function orderErrorText(error) {
+    if (error === "variable_symbol_already_used") return "tenhle variabilní symbol už drží jiná objednávka";
+    if (error === "voucher_ks_not_configured") return "vyplňte KS — v prostředí žádný nastavený není";
+    if (error === "order_already_settled") return "objednávka je vyřízená, měnit lze jen e-mail";
+    if (error === "cash_order_has_no_constant_symbol") return "hotovostní objednávka žádný KS nemá";
+    if (error === "not_found") return "objednávka už neexistuje";
+    if (error === "amountCzk must be a positive number below 100000000") return "částka musí být kladné číslo";
+    if (error === "variableSymbol must be 1 to 10 digits") return "variabilní symbol musí být 1 až 10 číslic";
+    if (error === "constantSymbol must be 1 to 4 digits") return "KS musí být 1 až 4 číslice";
+    if (error === "email must be a valid e-mail address") return "e-mail nevypadá jako adresa";
+    return error;
+  }
+
+  /**
+   * Opens the form, empty or loaded with an order.
+   *
+   * A settled order gets its amount and symbols disabled rather than being
+   * refused on submit: the Worker freezes those once the receipt is out, and
+   * that is worth seeing before typing into the field, not after.
+   */
+  function openOrderForm(row) {
+    editingOrderId = row ? row.id : null;
+    orderFormTitle.textContent = row ? "Upravit objednávku VS " + row.variableSymbol : "Nová objednávka";
+    orderAmount.value = row ? String(Number(row.amountCzk)) : "";
+    orderVs.value = row ? row.variableSymbol : "";
+    orderKind.value = row ? row.kind : "VOUCHER";
+    orderEmail.value = row ? row.email : "";
+    orderKs.value = row ? row.constantSymbol : "";
+    orderCash.checked = row ? row.paymentMethod === "CASH" : false;
+    orderFormMsg.textContent = "";
+    orderFormMsg.className = "";
+    ordersMsg.textContent = "";
+
+    var settled = !!row && row.status !== "PENDING";
+    editingSettled = settled;
+    [orderAmount, orderVs, orderKind, orderKs].forEach(function (el) { el.disabled = settled; });
+    // What an order *is* cannot be edited at all — an order is either settled by
+    // the bank or paid at the counter, and flipping it would orphan the payment.
+    orderCash.disabled = !!row;
+
+    orderFormHint.textContent = !row
+      ? "KS musí být stejný, jaký nese QR platba — jinak se příchozí převod nespáruje. U hotovosti se KS nepoužívá."
+      : settled
+        ? "Objednávka je vyřízená: účet i poukaz už mají původní údaje vytištěné, měnit lze jen e-mail."
+        : "Dokud objednávka čeká na platbu, dá se změnit všechno — částka i symbol jsou to, na co se převod páruje.";
+
+    orderForm.classList.remove("hidden");
+    orderForm.scrollIntoView({ block: "nearest" });
+  }
+
+  function closeOrderForm() {
+    editingOrderId = null;
+    editingSettled = false;
+    orderForm.classList.add("hidden");
+    orderFormMsg.textContent = "";
+    orderFormMsg.className = "";
+  }
+
+  orderNewBtn.addEventListener("click", function () { openOrderForm(null); });
+  orderCancelBtn.addEventListener("click", closeOrderForm);
+
+  orderForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var creating = editingOrderId === null;
+    var email = orderEmail.value.trim();
+    // Only what the Worker will actually accept: everything for a new order,
+    // the amount and symbols only while one is still waiting to be paid, and
+    // nothing but the address once it has been.
+    var payload = creating
+      ? {
+          amountCzk: Number(orderAmount.value),
+          variableSymbol: orderVs.value.trim(),
+          kind: orderKind.value,
+          email: email,
+          constantSymbol: orderKs.value.trim(),
+          cash: orderCash.checked,
+        }
+      : editingSettled
+        ? { id: editingOrderId, email: email }
+        : {
+            id: editingOrderId,
+            amountCzk: Number(orderAmount.value),
+            variableSymbol: orderVs.value.trim(),
+            kind: orderKind.value,
+            email: email,
+            constantSymbol: orderKs.value.trim(),
+          };
+
+    orderSaveBtn.disabled = true;
+    orderFormMsg.className = "";
+    orderFormMsg.textContent = "Ukládám…";
+
+    authFetch(creating ? "/admin/orders" : "/admin/orders/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+      .then(function (out) {
+        orderSaveBtn.disabled = false;
+        if (!out.ok) {
+          orderFormMsg.className = "error";
+          orderFormMsg.textContent = "Nepodařilo se uložit: " + orderErrorText(out.data.error || "neznámá chyba");
+          return;
+        }
+        ordersMsg.textContent = creating
+          ? out.data.status === "PAID"
+            ? "Objednávka " + out.data.variableSymbol + " vytvořena a hned odeslána (hotovost)."
+            : "Objednávka " + out.data.variableSymbol + " vytvořena, čeká na platbu."
+          : "Objednávka " + out.data.variableSymbol + " uložena.";
+        closeOrderForm();
+        loadOrders();
+      })
+      .catch(function (err) {
+        orderSaveBtn.disabled = false;
+        orderFormMsg.className = "error";
+        orderFormMsg.textContent = "Chyba spojení: " + err.message;
+      });
+  });
 
   function loadAll() {
     loadFioStatus().catch(function () {});

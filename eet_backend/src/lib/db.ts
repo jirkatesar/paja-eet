@@ -271,6 +271,50 @@ export async function getPaymentOrder(db: D1Database, id: number): Promise<Payme
   return row ?? null;
 }
 
+/**
+ * The columns an edit may change — nothing else, whatever a caller passes. A
+ * status, a payment method or a `paidAt` is not something an edit sets: those
+ * are what the bank and the mailer decide.
+ */
+export type PaymentOrderPatch = {
+  amountCzk?: string;
+  variableSymbol?: string;
+  vsNormalized?: string;
+  constantSymbol?: string;
+  email?: string;
+  kind?: PaymentKind;
+};
+
+const PATCHABLE_COLUMNS: (keyof PaymentOrderPatch)[] = [
+  "amountCzk",
+  "variableSymbol",
+  "vsNormalized",
+  "constantSymbol",
+  "email",
+  "kind",
+];
+
+/**
+ * Applies the fields given, leaving the rest of the order alone, and hands back
+ * the row as it now stands — null when there is no order with that id.
+ *
+ * Validated by the caller (`lib/paymentOrder.ts`'s `editPaymentOrder`), which is
+ * also where the rule lives about what may change once an order has been
+ * settled. A variable symbol another live order already holds throws here (the
+ * partial unique index), which the caller turns into a 409.
+ */
+export async function updatePaymentOrder(db: D1Database, id: number, patch: PaymentOrderPatch): Promise<PaymentOrderRow | null> {
+  const columns = PATCHABLE_COLUMNS.filter((column) => patch[column] !== undefined);
+  if (columns.length === 0) return getPaymentOrder(db, id);
+
+  const assignments = columns.map((column) => `${column} = ?`).join(", ");
+  const row = await db
+    .prepare(`UPDATE PaymentOrder SET ${assignments}, updatedAt = datetime('now') WHERE id = ? RETURNING *`)
+    .bind(...columns.map((column) => patch[column]), id)
+    .first<PaymentOrderRow>();
+  return row ?? null;
+}
+
 /** The `PENDING` order a bank transaction is expected to settle, matched on the normalized variable symbol. */
 export async function findPendingPaymentOrder(db: D1Database, vsNormalized: string): Promise<PaymentOrderRow | null> {
   const row = await db
@@ -349,6 +393,13 @@ export async function expireOrders(db: D1Database, olderThanDays: number): Promi
 export type PaymentOrderFilter = {
   status: PaymentOrderStatus | "ALL";
   limit: number;
+  /**
+   * Oldest first instead of the default newest first. The admin dashboard wants
+   * the latest rows at the top; a list of orders still *waiting* for money wants
+   * the opposite, because the ones worth chasing are the ones that have been
+   * waiting longest and are closest to expiring.
+   */
+  oldestFirst?: boolean;
 };
 
 /** Most recent first — backs the admin dashboard's orders table. */
@@ -362,7 +413,7 @@ export async function listPaymentOrders(db: D1Database, filter: PaymentOrderFilt
   params.push(filter.limit);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await db
-    .prepare(`SELECT * FROM PaymentOrder ${where} ORDER BY id DESC LIMIT ?`)
+    .prepare(`SELECT * FROM PaymentOrder ${where} ORDER BY id ${filter.oldestFirst ? "ASC" : "DESC"} LIMIT ?`)
     .bind(...params)
     .all<PaymentOrderRow>();
   return result.results;

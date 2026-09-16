@@ -28,6 +28,42 @@ renders one, and `POST /voucher/order` (migration `0003_voucher_order.sql`)
 takes an order, matches the incoming bank transfer, and e-mails the voucher —
 see "Voucher orders" in Current status and the README.
 
+- **The dashboard can create and edit orders too** (added 2026-09-15). The
+  orders table has **Nová objednávka** above it and **Upravit** on each row,
+  both opening one form; the page still authenticates with `ADMIN_PASSWORD`, so
+  a human never holds `EET_API_TOKEN`. Backed by `POST /admin/orders` (create —
+  literally `createPaymentOrder`, the same path the app's `/order` uses) and
+  `POST /admin/orders/update` (edit → `editPaymentOrder` in
+  `lib/paymentOrder.ts`, DB write in `db.updatePaymentOrder`).
+  - **The rule about editing is the customer's, not the database's**: while an
+    order is `PENDING` everything may change (the amount and the variable symbol
+    are what the transfer is matched on — exactly what a typo needs fixing in);
+    once it is settled only the e-mail may, because the receipt and the voucher
+    PDF are with the customer with those numbers printed on them. The form
+    disables the frozen fields *and* sends only the e-mail for a settled order —
+    sending the disabled fields' values would have the Worker refuse the whole
+    edit, e-mail included, with `409 order_already_settled`. That was a real bug
+    here, found by writing down what the form actually posts.
+  - An edit that changes the amount/symbol/KS re-runs `claimWaitingPayment`, so
+    correcting a symbol can settle an order against money that arrived before it
+    existed — same as creating one. It **cannot** rescue a payment that arrived
+    while the order existed and mismatched: that transaction was never stored
+    (only noted via `noteMatchFailure`), and Fio's bookmark has moved past it.
+  - Verified locally with `wrangler dev --local` against the local D1, with
+    `ADMIN_PASSWORD` as the credential: create transfer (201 `PENDING`), create
+    cash (201 `PAID`), duplicate VS (409), KS left blank falling back to
+    `VOUCHER_KS`, the exact payloads the form sends for a pending and for a
+    settled order, and every refusal — zero amount, letters in VS/KS, missing
+    id (404), no token (401), and `order_already_settled` (409). The claim path
+    was exercised end to end too: a waiting `UnmatchedPayment` row was consumed,
+    the order went `PAID`, and the sale was registered — **against the EET
+    playground**, under `fio-TEST-1`; that `EetSale` row and all the test orders
+    were deleted afterwards (the local DB is back to just `admin-ui-test-1`).
+  - **The page's JavaScript is not exercised in a browser** — there is none
+    here. Both scripts pass `node --check` (the procedure in "The admin pages
+    are template literals") and the payloads they build were replayed against
+    the Worker by hand, which is how the settled-order bug above was found; the
+    form's actual rendering and click-through still want a look.
 - **The dashboard can delete records.** `POST /admin/data/delete` and
   `POST /admin/orders/delete` (added 2026-09-15) each take `{ id }` and answer
   `404` for an id that is gone. Verified locally: both delete, the second call
@@ -142,6 +178,25 @@ Two consequences worth remembering:
     eventually log the operator out on a page switch.
   - `VOUCHER_KS`, `VOUCHER_ORDER_TTL_DAYS` and the EET settings are deliberately
     *not* on the page; the table is shaped so they can be added the same way.
+- **`GET /orders` gives the app its unpaid list** (added 2026-09-15). Bearer
+  auth is `EET_API_TOKEN` — the credential the phone already holds, so no new
+  secret has to reach it. Defaults to `status=PENDING`, `limit` 50 (max 200),
+  and is **oldest first** (`PaymentOrderFilter.oldestFirst` in `db.ts`), unlike
+  the admin table: the reason to open this list is that something has been
+  outstanding a while, and the row at the top is the one nearest expiry. Rows
+  are `orderResponse`, plus a top-level `ttlDays` so the caller can say when an
+  order expires instead of hardcoding `VOUCHER_ORDER_TTL_DAYS`. `status=ALL` is
+  accepted, matching `/admin/orders` — the two read one table and a filter that
+  works on one and 400s on the other is a trap.
+  - Verified locally with `wrangler dev --local` against the local D1: default
+    returns only `PENDING`, oldest first, with `ttlDays: 30`; a `lastError` set
+    by a match failure comes back on the row; `limit=1` takes the oldest;
+    `?status=PAID` / `?status=ALL` filter correctly; `?status=BOGUS` is a 400;
+    no token and a wrong token are both 401; `?limit=99999` is clamped rather
+    than refused. Test rows were deleted afterwards — the local `PaymentOrder`
+    table is empty again.
+  - **Not verified:** the Android side on a device (no emulator here), and
+    anything on a deployed Worker — this endpoint is not deployed yet either.
 - **`GET /admin` shows voucher orders too** — a second table fed by
   `GET /admin/orders` (status filter + limit), alongside the Fio poll state
   and the `EetSale` table below.

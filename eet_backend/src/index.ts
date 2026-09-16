@@ -6,7 +6,7 @@ import { ADMIN_CONFIG_HTML } from "./lib/adminConfigPage";
 import { attemptSubmit, normalizeAmount, reportSale, type EetEnv } from "./lib/reportSale";
 import { runFioPollIfDue } from "./lib/fio";
 import { fillVoucher } from "./lib/voucher";
-import { createPaymentOrder, retryDeliveries, orderTtlDays, type PaymentOrderEnv } from "./lib/paymentOrder";
+import { createPaymentOrder, editPaymentOrder, retryDeliveries, orderTtlDays, type PaymentOrderEnv } from "./lib/paymentOrder";
 import type { PaymentOrderRow, PaymentOrderStatus } from "./lib/db";
 import { buildConfigPatch, describeConfig, resolveFio, type FioEnvSource } from "./lib/appConfig";
 
@@ -70,6 +70,9 @@ const ORDER_STATUS_VALUES = ["PENDING", "PAID", "SENT", "EXPIRED", "CANCELLED"] 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_ADMIN_DATA_LIMIT = 50;
 const MAX_ADMIN_DATA_LIMIT = 500;
+/** `GET /orders` — the app's own list, which is read on a phone screen and is never the whole history. */
+const DEFAULT_ORDER_LIMIT = 50;
+const MAX_ORDER_LIMIT = 200;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -217,6 +220,39 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json(orderResponse(result.order), 201);
   }
 
+  // The till's own list of what it is still waiting to be paid: orders made from
+  // the app whose money has not arrived. Bearer auth is EET_API_TOKEN — the
+  // credential the app already holds, so nothing new has to reach a phone.
+  //
+  // Oldest first, unlike the dashboard's orders table: the reason to look at this
+  // list at all is that something has been outstanding a while, and the order at
+  // the top is the one closest to expiring. `ttlDays` comes back with the rows so
+  // the app can say when that is instead of hardcoding the Worker's setting.
+  if (request.method === "GET" && url.pathname === "/orders") {
+    if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
+
+    // Still a filter rather than a hardcoded PENDING: this is the same table the
+    // dashboard reads, and the app is allowed to ask what became of an order.
+    // `ALL` is accepted for the same reason it is on `/admin/orders` — the two
+    // endpoints read one table, and a filter that works on one and 400s on the
+    // other is a trap rather than a restriction.
+    const statusParam = url.searchParams.get("status") ?? "PENDING";
+    if (statusParam !== "ALL" && !ORDER_STATUS_VALUES.includes(statusParam as PaymentOrderStatus)) {
+      return json({ error: "invalid_status" }, 400);
+    }
+
+    const limitParam = Number(url.searchParams.get("limit"));
+    const limit =
+      Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.trunc(limitParam), MAX_ORDER_LIMIT) : DEFAULT_ORDER_LIMIT;
+
+    const rows = await db.listPaymentOrders(env.DB, {
+      status: statusParam as PaymentOrderStatus,
+      limit,
+      oldestFirst: true,
+    });
+    return json({ rows: rows.map(orderResponse), ttlDays: orderTtlDays(env) });
+  }
+
   if (request.method === "GET" && url.pathname.startsWith("/status/")) {
     if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
     const reference = decodeURIComponent(url.pathname.slice("/status/".length));
@@ -329,6 +365,47 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const id = await readId(request);
     if (id === null) return json({ error: "invalid_json" }, 400);
     return (await db.deleteEetSale(env.DB, id)) ? json({ ok: true }) : json({ error: "not_found" }, 404);
+  }
+
+  // The dashboard's "Nová objednávka" — an order typed in by hand, for a sale
+  // that happened away from the till (a transfer agreed over the phone, or a
+  // payment that arrived with no order to match). Accepts either credential, so
+  // the operator never has to hold the machine token; the validation and the
+  // delivery that follows are the same code path the app's own `/order` uses.
+  if (request.method === "POST" && url.pathname === "/admin/orders") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+
+    const result = await createPaymentOrder(env, body);
+    if (!result.ok) return json({ error: result.error }, result.status);
+    return json(orderResponse(result.order), 201);
+  }
+
+  // Editing an order — see `editPaymentOrder` for what may change once the
+  // money is in. `id` is read from the body rather than the path so this stays
+  // a POST like its create/delete siblings.
+  if (request.method === "POST" && url.pathname === "/admin/orders/update") {
+    if (!checkAdminAuth(request, env)) return json({ error: "unauthorized" }, 401);
+
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+
+    const id = Number(body.id);
+    if (!Number.isInteger(id) || id <= 0) return json({ error: "invalid_id" }, 400);
+
+    const result = await editPaymentOrder(env, id, body);
+    if (!result.ok) return json({ error: result.error }, result.status);
+    return json(orderResponse(result.order));
   }
 
   if (request.method === "POST" && url.pathname === "/admin/orders/delete") {

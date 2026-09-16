@@ -390,6 +390,16 @@ delivery on top of the revenue record.
 Unpaid orders expire after `VOUCHER_ORDER_TTL_DAYS` (default 30) and release
 their variable symbol for reuse.
 
+**Orders can also be managed by hand** — created and edited from the admin
+dashboard's orders table, not only by the app. See "Managing orders from the
+page" below.
+
+**The app can see what is still unpaid.** `GET /orders` (above) hands the till
+the `PENDING` orders, oldest first — the Android app shows them on its
+"Nezaplacené" screen, which is the only place the question "did that customer
+ever pay?" can be answered, since the phone sees no further than the QR code it
+handed over.
+
 ### SMTP configuration
 
 Outgoing mail goes over `cloudflare:sockets`, because Workers have no usable
@@ -422,8 +432,9 @@ the wire in the clear. There is deliberately no override flag.
 
 ## API
 
-`POST /report`, `GET /status/:reference`, `POST /voucher`, and `POST /order`
-(and its `/voucher/order` alias) require `Authorization: Bearer <EET_API_TOKEN>`.
+`POST /report`, `GET /status/:reference`, `POST /voucher`, `POST /order`
+(and its `/voucher/order` alias) and `GET /orders` require
+`Authorization: Bearer <EET_API_TOKEN>`.
 `GET /admin/data`, `GET /admin/orders`, `GET /fio/status`, and
 `POST /fio/poll` accept either `EET_API_TOKEN` or `ADMIN_PASSWORD` — see
 "Admin dashboard" below.
@@ -450,6 +461,34 @@ replaying a stored row — always includes `pok`, `test`, and `errorCode`
 
 **`GET /status/:reference`** → full row (`status`, `pok`, `test`,
 `attempts`, `lastErrorCode`, `lastErrorMessage`, timestamps), or `404`.
+
+**`GET /orders`** — the orders still waiting to be paid, for the till itself.
+The app knows it handed over a QR code; only the Worker knows whether the money
+ever arrived, so this is the one place that question can be answered:
+
+```json
+200 { "rows": [ { "id": 37, "variableSymbol": "2609151234", "amountCzk": "1500.00",
+                  "kind": "SERVICE", "email": "jan@example.com", "status": "PENDING",
+                  "createdAt": "2026-09-01 08:00:00", "lastError": null, … } ],
+      "ttlDays": 30 }
+```
+
+| Param | Values | Default |
+| --- | --- | --- |
+| `status` | `ALL` \| `PENDING` \| `PAID` \| `SENT` \| `EXPIRED` \| `CANCELLED` | `PENDING` |
+| `limit` | 1–200 | 50 |
+
+Rows are the same shape `POST /order` answers with — the app reads `amountCzk`
+as the decimal string it is, and `lastError` is where a payment that arrived
+but did not match shows up ("Platba dorazila, ale nesedí: …"), which is the one
+thing worth showing an operator loudly. Unlike `/admin/orders`, this is
+**oldest first**: the reason to open this list is that something has been
+outstanding for a while, and the order at the top is the one closest to
+expiring. `ttlDays` is the effective `VOUCHER_ORDER_TTL_DAYS`, so the caller can
+say when that is without hardcoding the setting.
+
+Read-only, and deliberately so — money arriving is what settles an order, and
+nothing a caller could send here would make that happen.
 
 ## Web configuration
 
@@ -516,6 +555,40 @@ variable symbol for another sale. Backed by `POST /admin/data/delete` and
 `POST /admin/orders/delete` (Bearer auth: either credential), each taking
 `{ "id": … }` and answering `404` when there is nothing with that id rather
 than pretending it worked.
+
+### Managing orders from the page
+
+The orders table also has **Nová objednávka** above it and **Upravit** on every
+row; both open the same form, and neither needs the machine token — the page
+authenticates with `ADMIN_PASSWORD` like everything else.
+
+- **Nová objednávka** — an order typed in by hand, for a sale that happened away
+  from the till: a transfer agreed over the phone, or money that arrived with no
+  order to match. Same fields, validation and delivery as the app's own
+  `POST /order` (it *is* that code path), plus the KS, which must be the one the
+  payment's QR carries or the transfer will never match. Left blank, the
+  environment's `VOUCHER_KS` is used, and if that is unset too the reply says so
+  rather than storing an order that can never settle.
+- **Upravit** — while the order is `PENDING` everything is editable, because
+  nothing has left this system yet: the amount and the variable symbol are what
+  the incoming transfer is matched on, so they are exactly what a typo needs
+  fixing in. Once the order has been settled the form greys those fields out and
+  sends only the e-mail — the receipt (and the voucher PDF) are already with the
+  customer with those numbers printed on them, and an edit here would only make
+  the record disagree with the paperwork. The Worker enforces the same rule
+  (`409 order_already_settled`), so the page cannot offer something it would
+  refuse.
+  - An edit that changes the amount, the symbol or the constant symbol re-runs
+    the claim on a payment that arrived before any order existed, exactly as
+    creating one does — so correcting a symbol can settle the order outright.
+    It cannot rescue a payment that arrived while *this* order existed and did
+    not match: that one was never stored anywhere, only noted on the order (see
+    "Matching a transfer").
+
+`POST /admin/orders` (create) and `POST /admin/orders/update` (edit) back these
+(Bearer auth: either credential). Update takes `{ "id": …, … }` and returns the
+order as it now stands; `404` for an id that is gone, `409` for a symbol another
+live order holds, and `400` for a field that does not validate.
 
 **`GET /admin/data`** (Bearer auth: `EET_API_TOKEN` or `ADMIN_PASSWORD`) —
 returns `{ rows: EetSaleRow[] }`, filtered and capped server-side via query

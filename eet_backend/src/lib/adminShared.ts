@@ -89,6 +89,7 @@ export const ADMIN_STYLES = `
   th { font-weight: 600; }
   tbody tr:hover { background: light-dark(#f7f7f7, #262626); }
   #rowsTableWrap, #ordersTableWrap { overflow-x: auto; }
+  .rowactions { display: flex; gap: 0.4rem; }
 
   code { background: light-dark(#eee, #333); padding: 0.1rem 0.3rem; border-radius: 0.2rem; }
 `;
