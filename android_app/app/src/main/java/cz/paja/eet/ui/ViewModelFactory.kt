@@ -16,6 +16,7 @@ class AppViewModelFactory(
     override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T = when (modelClass) {
         PaymentViewModel::class.java -> PaymentViewModel(settingsRepository, eetApiClient, pendingRepository) as T
         SettingsViewModel::class.java -> SettingsViewModel(settingsRepository) as T
+        UnpaidOrdersViewModel::class.java -> UnpaidOrdersViewModel(settingsRepository, eetApiClient) as T
         else -> throw IllegalArgumentException("Unknown ViewModel class: $modelClass")
     }
 }

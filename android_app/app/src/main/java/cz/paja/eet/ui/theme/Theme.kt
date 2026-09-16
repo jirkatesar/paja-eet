@@ -129,6 +129,23 @@ val MoneyAmount = TextStyle(
     letterSpacing = (-0.5).sp,
 )
 
+/**
+ * A label in the bottom bar.
+ *
+ * Four of them now share one row, and at the baseline size — `labelMedium`,
+ * 12sp with tracking — "Nezaplacené" broke in the middle of the word on a
+ * 360dp-wide phone, which is what the bar looked like on the first device it
+ * ran on. Sized to fit instead, with the letter spacing taken out: what that
+ * tracking buys in a label standing on its own is not worth a hyphen-less break
+ * in a menu.
+ */
+val BarLabel = TextStyle(
+    fontSize = 10.sp,
+    lineHeight = 12.sp,
+    fontWeight = FontWeight.Medium,
+    letterSpacing = 0.sp,
+)
+
 /** The small heading above a group of controls. */
 val SectionLabel = TextStyle(
     fontSize = 12.sp,

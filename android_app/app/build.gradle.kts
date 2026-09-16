@@ -71,6 +71,11 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
+    // A real org.json for the unit tests. android.jar ships the same classes,
+    // but as stubs that throw — and the wire-format reading is worth testing
+    // against the real thing, because its behaviour around JSON null is not the
+    // obvious one (see EetApiClient.optTextOrNull).
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")

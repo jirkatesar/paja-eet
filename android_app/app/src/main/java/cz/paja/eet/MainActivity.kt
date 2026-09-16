@@ -15,11 +15,13 @@ import androidx.navigation.compose.rememberNavController
 import cz.paja.eet.ui.AppViewModelFactory
 import cz.paja.eet.ui.PaymentViewModel
 import cz.paja.eet.ui.SettingsViewModel
+import cz.paja.eet.ui.UnpaidOrdersViewModel
 import cz.paja.eet.ui.Routes
 import cz.paja.eet.ui.screens.PaymentScreen
 import cz.paja.eet.ui.screens.PendingScreen
 import cz.paja.eet.ui.screens.SettingsScreen
 import cz.paja.eet.ui.screens.TransferQrScreen
+import cz.paja.eet.ui.screens.UnpaidOrdersScreen
 import cz.paja.eet.ui.theme.PajaEetTheme
 
 
@@ -62,6 +64,19 @@ class MainActivity : ComponentActivity() {
                             pendingCount = pendingCount.size,
                             onNavigate = ::goTo,
                             onShowTransferQr = { navController.navigate(Routes.TRANSFER_QR) },
+                        )
+                    }
+                    composable(Routes.UNPAID) {
+                        // Scoped to this destination on purpose: the list is read
+                        // when the screen is opened, and a ViewModel that outlived
+                        // it would show whatever the Worker said the last time the
+                        // operator looked.
+                        val unpaidViewModel: UnpaidOrdersViewModel = viewModel(factory = factory)
+                        UnpaidOrdersScreen(
+                            state = unpaidViewModel.state,
+                            onRefresh = unpaidViewModel::refresh,
+                            pendingCount = pendingCount.size,
+                            onNavigate = ::goTo,
                         )
                     }
                     composable(Routes.PENDING) {
