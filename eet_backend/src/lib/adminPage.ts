@@ -153,6 +153,28 @@ const SCRIPT = `
    */
   var editingSettled = false;
 
+  /**
+   * Today, as this browser's own calendar day.
+   *
+   * Built from the local parts rather than toISOString, which is UTC and would
+   * hand back yesterday for the first hour or two of a Prague morning.
+   */
+  function todayLocal() {
+    var now = new Date();
+    var month = String(now.getMonth() + 1);
+    var day = String(now.getDate());
+    if (month.length < 2) month = "0" + month;
+    if (day.length < 2) day = "0" + day;
+    return now.getFullYear() + "-" + month + "-" + day;
+  }
+
+  // The range starts on today rather than empty. Empty is not "no filter" here:
+  // loadRows leaves the params out and the Worker then falls back to *its* today,
+  // which is UTC and disagrees with the operator's around midnight. The day the
+  // page shows and the day it asks for are the same one from the start.
+  dateFromInput.value = todayLocal();
+  dateToInput.value = todayLocal();
+
   function guard(res) {
     if (res.status === 401) { showLogin("Heslo přestalo platit, přihlas se znovu."); throw new Error("unauthorized"); }
     return res;

@@ -604,6 +604,9 @@ params so the caller controls exactly how much it pulls:
 The UTC-"today" default only matters if a caller omits `dateFrom`/`dateTo`
 entirely — a caller in Europe/Prague should pass its own local "today"
 explicitly, since the two only disagree in the hour or so around UTC
-midnight otherwise.
+midnight otherwise. **The dashboard page does exactly that**: its Od/Do
+fields start filled with the browser's own today rather than empty, so the
+day shown on screen and the day asked of the Worker are the same one, at any
+hour. Clearing them brings the Worker's UTC fallback back.
 
 See "Fio Banka polling" above for `GET /fio/status` and `POST /fio/poll`.
