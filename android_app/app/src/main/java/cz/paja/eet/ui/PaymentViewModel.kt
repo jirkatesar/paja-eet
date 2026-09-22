@@ -193,20 +193,22 @@ class PaymentViewModel(
         // well, a service just the receipt. It runs alongside the EET report
         // rather than after it: one failing must not take the other down with it.
         //
-        // With no e-mail there is nobody to send to, so no order is made at all.
-        voucherEmailOrNull()?.let { email ->
-            recordOrder(
-                OrderRequest(
-                    amountCzk = amount,
-                    variableSymbol = variableSymbol,
-                    email = email,
-                    kind = kindFor(),
-                    constantSymbol = null,
-                    cash = true,
-                    reportReference = reference,
-                ),
-            )
-        }
+        // Recorded even when no e-mail was given, which is the common case at a
+        // counter. The order is what the day's history is built from, so a sale
+        // without one would simply be missing from it; with no address the
+        // Worker files the order and sends nothing, rather than trying to send
+        // to nobody.
+        recordOrder(
+            OrderRequest(
+                amountCzk = amount,
+                variableSymbol = variableSymbol,
+                email = customerEmail.trim(),
+                kind = kindFor(),
+                constantSymbol = null,
+                cash = true,
+                reportReference = reference,
+            ),
+        )
 
         viewModelScope.launch {
             cashState = CashSubmissionState.Loading
@@ -292,9 +294,6 @@ class PaymentViewModel(
         )
         return true
     }
-
-    /** The customer's e-mail, or null when there is nobody to send to — in which case nothing is ordered. */
-    private fun voucherEmailOrNull(): String? = customerEmail.trim().takeIf { it.isNotBlank() }
 
     private fun recordOrder(request: OrderRequest) {
         val current = settings.value
@@ -459,21 +458,23 @@ class PaymentViewModel(
             }
         }
 
-        if (item.email.isNotBlank()) {
-            val result = eetApiClient.createOrder(
-                eetUrl = current.eetUrl,
-                eetToken = current.eetToken,
-                amountCzk = item.amountCzk,
-                variableSymbol = item.variableSymbol,
-                email = item.email,
-                kind = item.kind,
-                constantSymbol = item.constantSymbol,
-                cash = item.cash,
-            )
-            when (result) {
-                PaymentOrderResult.Recorded, PaymentOrderResult.AlreadyExists -> Unit
-                is PaymentOrderResult.Error -> return result.message
-            }
+        // Always, blank address included — every sale has an order now, and one
+        // that skipped this would be missing from the day's history for good. The
+        // Worker accepts an empty address and files the order without delivering
+        // anything.
+        val result = eetApiClient.createOrder(
+            eetUrl = current.eetUrl,
+            eetToken = current.eetToken,
+            amountCzk = item.amountCzk,
+            variableSymbol = item.variableSymbol,
+            email = item.email,
+            kind = item.kind,
+            constantSymbol = item.constantSymbol,
+            cash = item.cash,
+        )
+        when (result) {
+            PaymentOrderResult.Recorded, PaymentOrderResult.AlreadyExists -> Unit
+            is PaymentOrderResult.Error -> return result.message
         }
 
         return null

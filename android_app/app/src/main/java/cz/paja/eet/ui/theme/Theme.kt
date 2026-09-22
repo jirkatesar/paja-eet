@@ -133,11 +133,11 @@ val MoneyAmount = TextStyle(
  * A label in the bottom bar.
  *
  * Four of them now share one row, and at the baseline size — `labelMedium`,
- * 12sp with tracking — "Nezaplacené" broke in the middle of the word on a
+ * 12sp with tracking — the longest label broke in the middle of the word on a
  * 360dp-wide phone, which is what the bar looked like on the first device it
  * ran on. Sized to fit instead, with the letter spacing taken out: what that
  * tracking buys in a label standing on its own is not worth a hyphen-less break
- * in a menu.
+ * in a menu. "Neodeslané" is the one to measure against now.
  */
 val BarLabel = TextStyle(
     fontSize = 10.sp,

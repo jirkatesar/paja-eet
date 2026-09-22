@@ -15,13 +15,13 @@ import androidx.navigation.compose.rememberNavController
 import cz.paja.eet.ui.AppViewModelFactory
 import cz.paja.eet.ui.PaymentViewModel
 import cz.paja.eet.ui.SettingsViewModel
-import cz.paja.eet.ui.UnpaidOrdersViewModel
+import cz.paja.eet.ui.HistoryViewModel
 import cz.paja.eet.ui.Routes
 import cz.paja.eet.ui.screens.PaymentScreen
 import cz.paja.eet.ui.screens.PendingScreen
 import cz.paja.eet.ui.screens.SettingsScreen
 import cz.paja.eet.ui.screens.TransferQrScreen
-import cz.paja.eet.ui.screens.UnpaidOrdersScreen
+import cz.paja.eet.ui.screens.HistoryScreen
 import cz.paja.eet.ui.theme.PajaEetTheme
 
 
@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val paymentViewModel: PaymentViewModel = viewModel(factory = factory)
 
-                // The menu switches between the three destinations; the QR code
+                // The menu switches between the four destinations; the QR code
                 // is a step in the middle of the payment flow, not one of them,
                 // so it stays out of the bar and keeps its back arrow.
                 val pendingCount by paymentViewModel.pending.collectAsState()
@@ -66,15 +66,17 @@ class MainActivity : ComponentActivity() {
                             onShowTransferQr = { navController.navigate(Routes.TRANSFER_QR) },
                         )
                     }
-                    composable(Routes.UNPAID) {
-                        // Scoped to this destination on purpose: the list is read
+                    composable(Routes.HISTORY) {
+                        // Scoped to this destination on purpose: the day is read
                         // when the screen is opened, and a ViewModel that outlived
                         // it would show whatever the Worker said the last time the
                         // operator looked.
-                        val unpaidViewModel: UnpaidOrdersViewModel = viewModel(factory = factory)
-                        UnpaidOrdersScreen(
-                            state = unpaidViewModel.state,
-                            onRefresh = unpaidViewModel::refresh,
+                        val historyViewModel: HistoryViewModel = viewModel(factory = factory)
+                        HistoryScreen(
+                            day = historyViewModel.day,
+                            state = historyViewModel.state,
+                            onDaySelected = historyViewModel::onDaySelected,
+                            onRefresh = historyViewModel::refresh,
                             pendingCount = pendingCount.size,
                             onNavigate = ::goTo,
                         )

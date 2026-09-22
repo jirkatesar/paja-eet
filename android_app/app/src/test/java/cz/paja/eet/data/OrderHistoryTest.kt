@@ -1,11 +1,13 @@
 package cz.paja.eet.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
 
-class UnpaidOrdersTest {
+class OrderHistoryTest {
 
     @Test
     fun `amount is read back from the Worker's decimal string`() {
@@ -52,26 +54,27 @@ class UnpaidOrdersTest {
     }
 
     @Test
-    fun `expiry is the stated number of days after the order was made`() {
-        val created = Instant.parse("2026-09-15T12:34:56Z").toEpochMilli()
-        val order = order(created)
-
-        assertEquals(created + 30L * 24 * 60 * 60 * 1000, order.expiresAt(30))
+    fun `only a settled order counts as paid`() {
+        assertTrue(record("PAID").isPaid)
+        assertTrue(record("SENT").isPaid)
+        assertFalse(record("PENDING").isPaid)
+        assertFalse(record("EXPIRED").isPaid)
+        assertFalse(record("CANCELLED").isPaid)
+        // An empty or invented status is the newer-Worker case: unpaid, because
+        // that is the mistake that costs a glance rather than a customer.
+        assertFalse(record("").isPaid)
+        assertFalse(record("SOMETHING_NEW").isPaid)
     }
 
-    @Test
-    fun `expiry is unknown when either half of it is`() {
-        assertNull(order(createdAt = null).expiresAt(30))
-        assertNull(order(Instant.parse("2026-09-15T12:34:56Z").toEpochMilli()).expiresAt(null))
-    }
-
-    private fun order(createdAt: Long?) = UnpaidOrder(
+    private fun record(status: String) = OrderRecord(
         id = 1,
-        variableSymbol = "2609151234",
-        amountCzk = 1500,
+        variableSymbol = "2609220915",
+        amountCzk = 500,
         kind = PaymentKind.SERVICE,
         email = "",
-        createdAt = createdAt,
+        status = status,
+        createdAt = Instant.parse("2026-09-22T09:15:00Z").toEpochMilli(),
+        paidAt = null,
         matchProblem = null,
     )
 }

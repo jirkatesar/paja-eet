@@ -1,7 +1,7 @@
 package cz.paja.eet.ui
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Settings
@@ -17,7 +17,7 @@ import cz.paja.eet.ui.theme.BarLabel
 /** The places this app can be. Kept as strings so they match the nav routes. */
 object Routes {
     const val PAYMENT = "payment"
-    const val UNPAID = "unpaid"
+    const val HISTORY = "history"
     const val PENDING = "pending"
     const val SETTINGS = "settings"
     const val TRANSFER_QR = "transfer_qr"
@@ -29,17 +29,18 @@ object Routes {
  * Four destinations is still what a bar at the bottom is for: it is what a thumb
  * reaches without letting go of the phone, and the till is used standing up.
  *
- * Two of the entries are lists of things that have gone wrong, and they are
- * different kinds of wrong: "Nezaplacené" is an order the Worker is holding
- * while nobody has paid for it — the money never arrived. "Neodeslané" is a sale
- * this phone could not tell the Worker about at all. The icons and the screens
- * behind them carry the distinction; the labels alone would not.
+ * "Historie" is a day of payments as the Worker has them — what was sold, and
+ * whether the money arrived; "Neodeslané" is the opposite kind of problem, a
+ * sale this phone could not tell the Worker about at all. The two look alike on
+ * a menu and are nothing alike: one is money that may never come, the other is a
+ * record that has not been filed yet.
  *
  * The count on "Neodeslané" is the point of the whole screen behind it — a sale
  * that never reached EET is a legal record with a deadline, and a plain menu
- * entry would not say whether anything is waiting there. The unpaid list has no
- * badge for the opposite reason: knowing its size takes a call to the Worker,
- * and a number that is only right when somebody last looked is worse than none.
+ * entry would not say whether anything is waiting there. The history has no
+ * badge for the opposite reason: knowing how much of a day is unpaid takes a
+ * call to the Worker, and a number that is only right when somebody last looked
+ * is worse than none.
  */
 @Composable
 fun PajaBottomBar(current: String, pendingCount: Int, onSelect: (String) -> Unit) {
@@ -51,10 +52,10 @@ fun PajaBottomBar(current: String, pendingCount: Int, onSelect: (String) -> Unit
             label = { Text("Platba", style = BarLabel) },
         )
         NavigationBarItem(
-            selected = current == Routes.UNPAID,
-            onClick = { onSelect(Routes.UNPAID) },
-            icon = { Icon(Icons.Filled.HourglassEmpty, contentDescription = null) },
-            label = { Text("Nezaplacené", style = BarLabel) },
+            selected = current == Routes.HISTORY,
+            onClick = { onSelect(Routes.HISTORY) },
+            icon = { Icon(Icons.Filled.History, contentDescription = null) },
+            label = { Text("Historie", style = BarLabel) },
         )
         NavigationBarItem(
             selected = current == Routes.PENDING,
