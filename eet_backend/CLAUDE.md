@@ -178,6 +178,59 @@ Two consequences worth remembering:
     eventually log the operator out on a page switch.
   - `VOUCHER_KS`, `VOUCHER_ORDER_TTL_DAYS` and the EET settings are deliberately
     *not* on the page; the table is shaped so they can be added the same way.
+- **A day of orders, and every sale is an order** (added 2026-09-22). The app's
+  screen is now "Historie": one day's payments, each marked paid or unpaid.
+  - `GET /orders` takes `date=YYYY-MM-DD`, a **Prague** calendar day, and
+    `status=ALL` returns the settled ones too. The day means when the sale was
+    *made*, not when the money arrived. `lib/pragueTime.ts`
+    (`pragueDayRangeUtc`) does the conversion on the Worker so the phone's own
+    timezone cannot shift which sales belong to which day; the range is
+    half-open. `pragueToday`/`CalendarDate` moved there out of `voucher.ts`, so
+    `"Europe/Prague"` is written down once.
+  - **Verified**, against the local D1 through `wrangler dev --local`: rows at
+    21:30 and 22:30 UTC land on different Prague days, a sale at 21:59:59 UTC is
+    on the 22nd and one at 22:00:00 UTC on the 23rd (the boundary is half-open),
+    all five statuses come back under `status=ALL`, `?date=2026-02-30` and
+    `?date=nonsense` are 400s, and `GET /orders` with no `date` still behaves
+    exactly as before. The DST cases were checked directly against the helper
+    (`2026-03-29` → 23h, `2026-10-25` → 25h, `2026-04-…` normal days 24h), which
+    is the part `Intl` could get quietly wrong. Test rows deleted afterwards.
+  - **`2026-02-30` used to be accepted** — `new Date()` rolls it into March
+    rather than failing, so the helper now builds the date from its parts and
+    checks they survived. Found by running it, not by reading it.
+  - **An order with no address is filed, not delivered.** `fulfilOrder` now
+    marks it `SENT` with `sentAt` null (`db.markOrderNothingToSend`) instead of
+    reaching `RCPT TO:<>` and sitting in the retry queue for good. Verified: a
+    cash order created with an empty e-mail came back `SENT`, `attempts: 1`,
+    `lastError: null`, logged "has no address — nothing to send", and did not
+    appear in the `PAID` list the cron retries; the same order *with* an address
+    still behaves as before (`PAID` + `lastError`, cron retries it).
+  - **The app now records an order for every sale, cash included.** It used to
+    skip `POST /order` when the e-mail field was blank — so cash takings were
+    missing from the day's ledger (and from the dashboard) entirely. That was
+    the last gap: the handoff had claimed since 2026-09-15 that "the app no
+    longer skips the call for a blank field", which was only ever true of the
+    transfer path.
+  - **`lastError` is split for callers** (2026-09-22, same day, after the app
+    was tested against the *deployed* Worker): the column carries both a payment
+    that arrived and did not fit and a receipt the mailer could not send, and
+    the till was showing the second one red on a row that already said the money
+    was in. `orderResponse` now also carries `matchProblem` — set only when
+    `lastError` starts with `MATCH_FAILURE_PREFIX` — and the app reads that
+    instead. `lastError` stays in the response for the dashboard, which is where
+    mail problems are diagnosed. Verified locally: a row with the SMTP error in
+    `lastError` comes back with `matchProblem: null`, and one with a match
+    failure comes back with it set.
+  - **`GET /orders` echoes `date` back**, and the app refuses an answer whose
+    echo does not match the day it asked for. That is because the *deployed*
+    Worker is still the 2026-09-15 build: it ignores the unknown parameter and
+    answers with every order it has, so the app's day filter silently showed
+    everything (reported as "filtr Den nefunguje" — it was the deployment, not
+    the filter; the local Worker was verified correct on 2026-09-22). The echo
+    turns that into a stated problem. **`npx wrangler deploy` is still owed** —
+    nothing was deployed from here, per "Deployment is manual".
+  - **Not verified:** the Android side on a device (no emulator here), and
+    anything on a deployed Worker — this is not deployed either.
 - **`GET /orders` gives the app its unpaid list** (added 2026-09-15). Bearer
   auth is `EET_API_TOKEN` — the credential the phone already holds, so no new
   secret has to reach it. Defaults to `status=PENDING`, `limit` 50 (max 200),

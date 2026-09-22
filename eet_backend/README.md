@@ -394,11 +394,19 @@ their variable symbol for reuse.
 dashboard's orders table, not only by the app. See "Managing orders from the
 page" below.
 
-**The app can see what is still unpaid.** `GET /orders` (above) hands the till
-the `PENDING` orders, oldest first — the Android app shows them on its
-"Nezaplacené" screen, which is the only place the question "did that customer
-ever pay?" can be answered, since the phone sees no further than the QR code it
-handed over.
+**The app can read a day back.** `GET /orders?date=…&status=ALL` hands the till
+every order of one day, paid and unpaid — the Android app shows them on its
+"Historie" screen, with each row marked paid or not and the day's total above
+them. That is the only place the question "did that customer ever pay?" can be
+answered, since the phone sees no further than the QR code it handed over.
+
+For the day to be *complete*, every sale has to become an order — and since
+2026-09-22 the app records one for cash sales as well, whether or not an address
+was given (it used to skip the call when the field was blank, so cash takings
+were missing from both the history and the dashboard). An order with no address
+is filed and delivered nowhere: `fulfilOrder` marks it `SENT` with no `sentAt`
+rather than trying to send to nobody, which also keeps it out of the cron's
+delivery retry queue.
 
 ### SMTP configuration
 
@@ -462,9 +470,9 @@ replaying a stored row — always includes `pok`, `test`, and `errorCode`
 **`GET /status/:reference`** → full row (`status`, `pok`, `test`,
 `attempts`, `lastErrorCode`, `lastErrorMessage`, timestamps), or `404`.
 
-**`GET /orders`** — the orders still waiting to be paid, for the till itself.
-The app knows it handed over a QR code; only the Worker knows whether the money
-ever arrived, so this is the one place that question can be answered:
+**`GET /orders`** — one day of orders, for the till itself. The app knows it
+handed over a QR code; only the Worker knows whether the money ever arrived, so
+this is the one place that question can be answered:
 
 ```json
 200 { "rows": [ { "id": 37, "variableSymbol": "2609151234", "amountCzk": "1500.00",
@@ -475,17 +483,36 @@ ever arrived, so this is the one place that question can be answered:
 
 | Param | Values | Default |
 | --- | --- | --- |
+| `date` | `YYYY-MM-DD`, a **Prague** calendar day | none — no day filter |
 | `status` | `ALL` \| `PENDING` \| `PAID` \| `SENT` \| `EXPIRED` \| `CANCELLED` | `PENDING` |
 | `limit` | 1–200 | 50 |
 
+The answer echoes the applied `date` back. That is a version guard, not
+decoration: a Worker deployed before this parameter existed ignores it and
+answers with every day's orders, which on the phone is indistinguishable from a
+day filter that quietly does nothing. The app compares the echo with the day it
+asked for and refuses the answer when they differ.
+
+`date` selects the day the sale was **made**, not the day the money arrived: a
+transfer ordered on Monday and paid on Wednesday belongs to Monday. The
+conversion to a UTC range happens on the Worker (`lib/pragueTime.ts`,
+`pragueDayRangeUtc`), and deliberately so — the app sends a plain calendar day
+and every caller means the same thing by it, whatever the phone's timezone is
+set to. The range is half-open, so a sale at 23:59:59 Prague is on that day and
+one at 00:00:00 is on the next. The dashboard's own filter (below) still works
+in UTC days; that is a known rough edge of the older admin table, not of this.
+
 Rows are the same shape `POST /order` answers with — the app reads `amountCzk`
-as the decimal string it is, and `lastError` is where a payment that arrived
-but did not match shows up ("Platba dorazila, ale nesedí: …"), which is the one
-thing worth showing an operator loudly. Unlike `/admin/orders`, this is
-**oldest first**: the reason to open this list is that something has been
-outstanding for a while, and the order at the top is the one closest to
-expiring. `ttlDays` is the effective `VOUCHER_ORDER_TTL_DAYS`, so the caller can
-say when that is without hardcoding the setting.
+as the decimal string it is, `status` decides whether the row is shown as paid
+(`PAID`/`SENT`) or not, and **`matchProblem`** carries a payment that arrived but
+did not match ("Platba dorazila, ale nesedí: …"), which is the one thing worth
+showing an operator loudly. It is *not* `lastError`: that column also holds
+receipts the mailer could not send, which the dashboard needs and a till has no
+business showing — see `matchProblemOf` in `src/index.ts`. Unlike `/admin/orders`, this is **oldest
+first**: a day reads the way it happened, and a list of what is outstanding puts
+the row closest to expiring at the top. `ttlDays` is the effective
+`VOUCHER_ORDER_TTL_DAYS`, so a caller can say when an unpaid order expires
+without hardcoding the setting.
 
 Read-only, and deliberately so — money arriving is what settles an order, and
 nothing a caller could send here would make that happen.

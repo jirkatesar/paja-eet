@@ -339,6 +339,24 @@ export async function markOrderPaid(db: D1Database, id: number, fioIdPohyb: stri
     .run();
 }
 
+/**
+ * Finishes an order's delivery when there was nothing to deliver — an order
+ * with no address (see `fulfilOrder`), which the app now records for cash sales
+ * as well as transfers.
+ *
+ * Status `SENT` and `sentAt` left null on purpose: nothing was sent, and a
+ * timestamp there would be a claim that something was. What matters is that the
+ * order leaves the delivery retry queue, which `SENT` does.
+ */
+export async function markOrderNothingToSend(db: D1Database, id: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE PaymentOrder SET status = 'SENT', attempts = attempts + 1, lastError = NULL, updatedAt = datetime('now') WHERE id = ? AND status = 'PAID'`,
+    )
+    .bind(id)
+    .run();
+}
+
 export async function markOrderSent(db: D1Database, id: number): Promise<void> {
   await db
     .prepare(
@@ -400,6 +418,14 @@ export type PaymentOrderFilter = {
    * waiting longest and are closest to expiring.
    */
   oldestFirst?: boolean;
+  /**
+   * UTC instants (ISO-8601) bounding `createdAt`, half-open: `>= createdFrom`
+   * and `< createdBefore`. One Prague calendar day, from `pragueDayRangeUtc` —
+   * the conversion happens there rather than here because it needs the
+   * timezone, and this function only knows about the database.
+   */
+  createdFrom?: string;
+  createdBefore?: string;
 };
 
 /** Most recent first — backs the admin dashboard's orders table. */
@@ -409,6 +435,16 @@ export async function listPaymentOrders(db: D1Database, filter: PaymentOrderFilt
   if (filter.status !== "ALL") {
     conditions.push("status = ?");
     params.push(filter.status);
+  }
+  // `datetime(...)` on both sides normalizes the stored "YYYY-MM-DD HH:MM:SS"
+  // (UTC) and the caller's ISO-8601 instant to the same comparable form.
+  if (filter.createdFrom) {
+    conditions.push("datetime(createdAt) >= datetime(?)");
+    params.push(filter.createdFrom);
+  }
+  if (filter.createdBefore) {
+    conditions.push("datetime(createdAt) < datetime(?)");
+    params.push(filter.createdBefore);
   }
   params.push(filter.limit);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";

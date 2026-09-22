@@ -6,14 +6,36 @@ import { ADMIN_CONFIG_HTML } from "./lib/adminConfigPage";
 import { attemptSubmit, normalizeAmount, reportSale, type EetEnv } from "./lib/reportSale";
 import { runFioPollIfDue } from "./lib/fio";
 import { fillVoucher } from "./lib/voucher";
-import { createPaymentOrder, editPaymentOrder, retryDeliveries, orderTtlDays, type PaymentOrderEnv } from "./lib/paymentOrder";
+import {
+  createPaymentOrder,
+  editPaymentOrder,
+  retryDeliveries,
+  orderTtlDays,
+  MATCH_FAILURE_PREFIX,
+  type PaymentOrderEnv,
+} from "./lib/paymentOrder";
 import type { PaymentOrderRow, PaymentOrderStatus } from "./lib/db";
 import { buildConfigPatch, describeConfig, resolveFio, type FioEnvSource } from "./lib/appConfig";
+import { pragueDayRangeUtc } from "./lib/pragueTime";
 
 export interface Env extends EetEnv, PaymentOrderEnv, FioEnvSource {
   EET_API_TOKEN: string;
   /** Password for the GET /admin web dashboard — set via `wrangler secret put ADMIN_PASSWORD`. Login only works while this is set. */
   ADMIN_PASSWORD?: string;
+}
+
+/**
+ * The one thing in `lastError` a till should ever see.
+ *
+ * The column carries two unrelated kinds of bad news: a payment that arrived and
+ * did not fit (written by `noteMatchFailure`), and a receipt the mailer could not
+ * send. The first is the customer's problem and belongs on the phone — the
+ * customer believes they have paid. The second is the operator's, and on a row
+ * that already says the money is in it is only noise, so it stays in the
+ * dashboard, where mail problems are diagnosed.
+ */
+function matchProblemOf(order: PaymentOrderRow): string | null {
+  return order.lastError?.startsWith(MATCH_FAILURE_PREFIX) ? order.lastError : null;
 }
 
 /** The order fields a caller gets back — internal columns stay internal. */
@@ -31,6 +53,7 @@ function orderResponse(order: PaymentOrderRow) {
     paidAt: order.paidAt,
     sentAt: order.sentAt,
     lastError: order.lastError,
+    matchProblem: matchProblemOf(order),
   };
 }
 
@@ -241,6 +264,19 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return json({ error: "invalid_status" }, 400);
     }
 
+    // `date` is a Prague calendar day, and it means the day the sale was *made*
+    // — when somebody stood at the counter, not when the money turned up. That
+    // is the day the till's own history is about, and it keeps a transfer that
+    // settles two days later in the day it belongs to. The timezone conversion
+    // happens here rather than in the app so that every caller means the same
+    // thing by "that day"; see `pragueDayRangeUtc`.
+    const dateParam = url.searchParams.get("date");
+    let range: { from: string; to: string } | null = null;
+    if (dateParam !== null) {
+      range = pragueDayRangeUtc(dateParam);
+      if (!range) return json({ error: "invalid_date" }, 400);
+    }
+
     const limitParam = Number(url.searchParams.get("limit"));
     const limit =
       Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.trunc(limitParam), MAX_ORDER_LIMIT) : DEFAULT_ORDER_LIMIT;
@@ -249,8 +285,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       status: statusParam as PaymentOrderStatus,
       limit,
       oldestFirst: true,
+      createdFrom: range?.from,
+      createdBefore: range?.to,
     });
-    return json({ rows: rows.map(orderResponse), ttlDays: orderTtlDays(env) });
+    // `date` is echoed back on purpose: a Worker that predates this parameter
+    // ignores it silently and answers with every day's orders, which looks
+    // exactly like a filter that does not work. The app compares the echo with
+    // the day it asked for and says so instead of showing the wrong day's money.
+    return json({ rows: rows.map(orderResponse), ttlDays: orderTtlDays(env), date: dateParam });
   }
 
   if (request.method === "GET" && url.pathname.startsWith("/status/")) {

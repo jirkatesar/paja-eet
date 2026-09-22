@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import voucherTemplate from "../../assets/poukazka.pdf";
+import { pragueToday, type CalendarDate } from "./pragueTime";
 
 /**
  * Fills the blank gift-voucher template (`assets/poukazka.pdf`) with the
@@ -35,14 +36,6 @@ const VALID_UNTIL_FIELD = { x: 318.666, y: 508.189, size: 12 } as const;
 /** How long a voucher stays redeemable — the template's own footnote says "6 měsíců od data vystavení". */
 const VALIDITY_MONTHS = 6;
 
-/**
- * The dates on the voucher are the ones a Czech customer reads off the
- * printed page, so "today" means today in Prague, not UTC — the two disagree
- * for two hours of every summer night, which is exactly when nobody is
- * issuing vouchers but also exactly when a UTC-based date would be wrong.
- */
-const ZONE = "Europe/Prague";
-
 export type VoucherParams = {
   /** Whole crowns; rendered without separators, e.g. 1000 → "1000". */
   amountCzk: number;
@@ -51,23 +44,6 @@ export type VoucherParams = {
   /** When the voucher is issued. Defaults to now; passed explicitly only to backdate. */
   issuedOn?: Date;
 };
-
-export type CalendarDate = { year: number; month: number; day: number };
-
-/** Today's calendar date in Prague — the day the customer would write on the voucher. */
-export function pragueToday(now: Date = new Date()): CalendarDate {
-  // en-CA formats as YYYY-MM-DD, which is the least painful thing to parse.
-  const [year, month, day] = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  })
-    .format(now)
-    .split("-")
-    .map(Number);
-  return { year, month, day };
-}
 
 /**
  * `date` shifted by whole months, clamping to the end of the target month:

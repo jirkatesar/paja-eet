@@ -36,6 +36,16 @@ export interface PaymentOrderEnv extends SmtpEnvSource {
   VOUCHER_ORDER_TTL_DAYS?: string;
 }
 
+/**
+ * What a match failure on an order starts with. `noteMatchFailure` writes it,
+ * and `index.ts` recognises it — it is the only thing in the order's single
+ * `lastError` column that the *app* should ever show, because it is the only one
+ * that means "a payment arrived and did not fit": the column also carries mail
+ * delivery errors, which are the operator's business, not the till's, and would
+ * only be noise on a row that already says the money is in.
+ */
+export const MATCH_FAILURE_PREFIX = "Platba dorazila, ale nesedí: ";
+
 const DEFAULT_ORDER_TTL_DAYS = 30;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VS_RE = /^\d{1,10}$/;
@@ -356,6 +366,17 @@ async function claimWaitingPayment(env: OrderEnv, order: PaymentOrderRow): Promi
  * would be the one outcome worth avoiding.
  */
 export async function fulfilOrder(env: PaymentOrderEnv, order: PaymentOrderRow): Promise<boolean> {
+  // Nothing to deliver, and two reasons not to try anyway: `RCPT TO:<>` is not a
+  // thing to say to a mail server, and an order that can never be sent would sit
+  // in the retry queue for good. Orders without an address are ordinary now —
+  // the app records one for every sale, so that a day's takings are complete —
+  // and this is where they stop.
+  if (order.email.trim() === "") {
+    await db.markOrderNothingToSend(env.DB, order.id);
+    console.log(`Order ${order.id} (${order.kind}, VS ${order.variableSymbol}) has no address — nothing to send`);
+    return true;
+  }
+
   try {
     const mail = orderMail(order);
     const attachment =
@@ -438,7 +459,7 @@ export async function matchAndFulfil(env: PaymentOrderEnv, payment: IncomingPaym
         : `expected KS ${order.constantSymbol}, payment had ${payment.constantSymbol ?? "(none)"}`;
     // On the order as well as in the log: the log is only ever read by whoever
     // thinks to go looking, and this is the question they will be asking.
-    await db.noteMatchFailure(env.DB, order.id, `Platba dorazila, ale nesedí: ${detail}`);
+    await db.noteMatchFailure(env.DB, order.id, `${MATCH_FAILURE_PREFIX}${detail}`);
     console.error(
       `Order ${order.id} (${order.kind}, VS ${order.variableSymbol}) not settled by transaction ${payment.idPohyb} — ${detail}`,
     );
